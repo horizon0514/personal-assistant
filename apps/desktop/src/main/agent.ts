@@ -1,4 +1,8 @@
-import { BrowserWindow, type IpcMainEvent, type WebContents, ipcMain } from "electron";
+/**
+ * 组合根(composition root):把各限界上下文的实现装配成一个可用的 agent,
+ * 并对外暴露一个面向 IPC 的 facade。IPC 注册见 ./ipc.ts。
+ */
+import { BrowserWindow, type WebContents } from "electron";
 import { PiAgentAdapter } from "@pa/ctx-task";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
@@ -31,18 +35,16 @@ const SYSTEM_PROMPT =
 /** 一个 chat 窗口 = 一个会话(多轮共享 transcript)*/
 const conversationId = newConversationId();
 
-export type ChatStreamEvent =
-  | { type: "delta"; text: string }
-  | { type: "done" }
-  | { type: "error"; message: string };
+type ChatStreamEvent = { type: "delta"; text: string } | { type: "done" } | { type: "error"; message: string };
 
 let adapter: PiAgentAdapter | undefined;
-// 当前活动请求的渲染端(chat 单轮串行,期间回调都发往它)
 let activeSender: WebContents | undefined;
 
-// 操作日志(可逆性):注册 filesystem 回滚器
 const journal = new OperationJournal();
 journal.registerReverser("filesystem", filesystemReverser);
+
+const pendingApprovals = new Map<string, (approved: boolean) => void>();
+const pendingBatches = new Map<string, (approved: boolean) => void>();
 
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
@@ -56,10 +58,7 @@ function broadcastJournal(): void {
   }
 }
 
-// 待裁决审批:actionId → resolve(approved)
-const pendingApprovals = new Map<string, (approved: boolean) => void>();
-
-/** UI 审批桥:发起审批,等用户在渲染层点同意/拒绝 */
+/** UI 审批桥:发起单工具审批 */
 function requestApproval(ask: ApprovalAsk): Promise<boolean> {
   return new Promise((resolve) => {
     pendingApprovals.set(ask.actionId, resolve);
@@ -73,10 +72,7 @@ function requestApproval(ask: ApprovalAsk): Promise<boolean> {
   });
 }
 
-// 批量改动预览:actionId → resolve(approved)
-const pendingBatches = new Map<string, (approved: boolean) => void>();
-
-/** 批量审批桥:把改动列表交给 UI 做 diff 预览,等整批同意/拒绝 */
+/** 批量审批桥:把改动列表交给 UI 做 diff 预览 */
 function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[] }): Promise<boolean> {
   return new Promise((resolve) => {
     pendingBatches.set(req.actionId, resolve);
@@ -102,8 +98,7 @@ function getAdapter(): PiAgentAdapter {
       onEvent: (event: DomainEvent) => sendTo("domain:event", event),
       afterTool: ({ actionId, capability, tool, details, isError }) => {
         if (isError) return;
-        const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)
-          ?.reversal;
+        const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)?.reversal;
         if (!reversal) return; // 只读工具无 reversal
         const summary =
           (details as { path?: string; to?: string } | undefined)?.path ??
@@ -117,42 +112,17 @@ function getAdapter(): PiAgentAdapter {
   return adapter;
 }
 
-export function registerChatIpc(): void {
-  ipcMain.handle("chat:model", () => `${PROVIDER} · ${MODEL}`);
+/** 面向 IPC 的 facade */
+export const agent = {
+  modelLabel: (): string => `${PROVIDER} · ${MODEL}`,
 
-  // 渲染层回传审批结果
-  ipcMain.on("approval:resolve", (_e, payload: { actionId: string; approved: boolean }) => {
-    const resolve = pendingApprovals.get(payload.actionId);
-    if (resolve) {
-      pendingApprovals.delete(payload.actionId);
-      resolve(payload.approved);
-    }
-  });
-
-  // 渲染层回传批量改动审批结果
-  ipcMain.on("batch:resolve", (_e, payload: { actionId: string; approved: boolean }) => {
-    const resolve = pendingBatches.get(payload.actionId);
-    if (resolve) {
-      pendingBatches.delete(payload.actionId);
-      resolve(payload.approved);
-    }
-  });
-
-  // 可逆性:列出 journal / 撤销上一步
-  ipcMain.handle("reversibility:list", () => journal.list());
-  ipcMain.handle("reversibility:undoLast", async () => {
-    const entry = await journal.undoLast();
-    broadcastJournal();
-    return entry ? { actionId: entry.actionId, tool: entry.tool, summary: entry.summary } : null;
-  });
-
-  ipcMain.on("chat:send", async (e: IpcMainEvent, text: string) => {
-    activeSender = e.sender;
+  async send(sender: WebContents, text: string): Promise<void> {
+    activeSender = sender;
     let instance: PiAgentAdapter;
     try {
       instance = getAdapter();
     } catch (err) {
-      sendTo("chat:stream", { type: "error", message: `模型初始化失败:${String(err)}` });
+      sendTo("chat:stream", { type: "error", message: `模型初始化失败:${String(err)}` } satisfies ChatStreamEvent);
       return;
     }
     try {
@@ -162,5 +132,29 @@ export function registerChatIpc(): void {
       const message = err instanceof Error ? err.message : String(err);
       sendTo("chat:stream", { type: "error", message } satisfies ChatStreamEvent);
     }
-  });
-}
+  },
+
+  resolveApproval(actionId: string, approved: boolean): void {
+    const resolve = pendingApprovals.get(actionId);
+    if (resolve) {
+      pendingApprovals.delete(actionId);
+      resolve(approved);
+    }
+  },
+
+  resolveBatch(actionId: string, approved: boolean): void {
+    const resolve = pendingBatches.get(actionId);
+    if (resolve) {
+      pendingBatches.delete(actionId);
+      resolve(approved);
+    }
+  },
+
+  listJournal: () => journal.list(),
+
+  async undoLast(): Promise<{ actionId: string; tool: string; summary: string } | null> {
+    const entry = await journal.undoLast();
+    broadcastJournal();
+    return entry ? { actionId: entry.actionId, tool: entry.tool, summary: entry.summary } : null;
+  }
+};

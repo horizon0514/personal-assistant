@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
-import { registerChatIpc } from "./chat";
+import { registerIpc } from "./ipc";
 
 const BG_LIGHT = "#f3f7f5";
 const BG_DARK = "#0e1411";
@@ -41,11 +41,11 @@ function createWindow(): void {
   }
 }
 
-// 占位 IPC:渲染层握手用,后续替换为领域事件桥
+// 占位 IPC:渲染层握手用
 ipcMain.handle("app:ping", () => "pong");
 
-// chat 流式 IPC
-registerChatIpc();
+// 领域 IPC(会话/审批/批量预览/可逆性)
+registerIpc();
 
 app.whenReady().then(() => {
   createWindow();
