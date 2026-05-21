@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ActionCard } from "./ActionCard";
 import { BatchPreview } from "./BatchPreview";
+import { MemoryList } from "../memory/MemoryList";
 import type { ActionRow, BatchState, JournalItem } from "./types";
 
 /**
@@ -95,6 +96,7 @@ export function WorkspacePanel(): JSX.Element {
 
   return (
     <section className="flex w-1/2 flex-col">
+      <MemoryList />
       <div className="flex items-center justify-between px-5 py-3">
         <span className="text-[13px] font-medium text-slate-500 dark:text-slate-400">计划 / 工作区</span>
         {journal.length > 0 && (

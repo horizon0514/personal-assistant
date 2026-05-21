@@ -13,7 +13,7 @@
 - [x] **Capability 工具**:cap-filesystem 暴露 list_dir/read_file(只读)+ write_file(可变更),已注入 adapter。
 - [x] **Trust 守门人落地**:ctx-trust createGatekeeper 替换了 allowAllGatekeeper(风险分级 + 策略 + 审批 IPC)。capabilityOf 待扩成多能力注册表。
 - [x] **Reversibility 记账**:OperationJournal + 按能力注册 reverser + undoLast;接 afterToolCall 记账;撤销 UI。
-- [ ] **Memory 召回**:接 `transformContext`,把偏好/事实注入上下文 + 标注网页不可信内容(InjectionGuard)。(阶段 B)
+- [x] **Memory 召回**:ctx-memory(本地 JSON,可见可删)+ remember 工具 + transformContext 注入召回 + UI 记忆列表。**阶段 B 首项完成。** (InjectionGuard 标注待 WebResearch/Browser 时做)
 - [x] **Plan/Step 显式建模**:DomainTranslator 按 turn 惰性建 Step(纯聊天 turn 不产生空步骤),Action 归属真实 stepId;工作区按"步骤 N"分组渲染。
 - [ ] **BYO key → Keychain**:`envApiKeyResolver` 仅占位,换成 OS Keychain 实现。(阶段 C)
 - [x] **真实对话验证**:DeepSeek 端到端跑通。
@@ -21,6 +21,12 @@
 - [ ] **extract_document**:PDF/图片信息提取工具(阶段 B,调研→产出需要)。
 - [x] **破坏性 fs 工具**:delete(软删到回收区)/ move_file(移动/重命名),均可回滚。
 - [x] **执行前 diff 预览整批审批**:plan_file_changes 工具一次性提交全部 move/delete,UI 整批预览+同意/拒绝,批准后原子执行+批量回滚日志。**阶段 A 完成。**
+
+## 记忆与检索演进(按需再做,勿过早)
+
+- [ ] **记忆 TTL / 衰减**:给记忆加有效期字段。"中期记忆"=会过期的记忆(如"最近在做项目 X");"长期"=不过期。不单独搞短/中/长三层架构(短期已由 pi 的对话上下文+compaction 覆盖)。决策:分层是存储分类法,不解决"写什么/何时召回/何时遗忘",过早引入是负担。
+- [ ] **相关性召回**:记忆/文件变多时,按相关性挑选注入,而非全量塞 prompt。
+- [ ] **采用 agentic search(grep)而非向量 RAG**:让 agent 用搜索工具(grep/glob)按需查找,而不是预建向量索引。理由:本地文件常变(索引易失效)、需要精确匹配(符号/字符串)、模型可多步推理"去哪找"、零索引基建。先加 filesystem 搜索能力(content grep + 文件名 glob);记忆召回同理用 search_memory(关键词)。真正需要语义相似度时再考虑 embedding,但不预先上 RAG。
 
 ## Agent harness 行为(自建 harness 时打磨)
 

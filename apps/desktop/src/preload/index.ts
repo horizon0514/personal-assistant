@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
+import type { MemoryView } from "@pa/ctx-memory";
 import type { FileChangeOp } from "@pa/cap-filesystem";
 
 export interface BatchRequest {
@@ -73,6 +74,15 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: JournalView[]): void => cb(payload);
       ipcRenderer.on("reversibility:changed", listener);
       return () => ipcRenderer.removeListener("reversibility:changed", listener);
+    }
+  },
+  memory: {
+    list: (): Promise<MemoryView[]> => ipcRenderer.invoke("memory:list"),
+    remove: (id: string): void => ipcRenderer.send("memory:remove", id),
+    onChanged: (cb: (items: MemoryView[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: MemoryView[]): void => cb(payload);
+      ipcRenderer.on("memory:changed", listener);
+      return () => ipcRenderer.removeListener("memory:changed", listener);
     }
   }
 };

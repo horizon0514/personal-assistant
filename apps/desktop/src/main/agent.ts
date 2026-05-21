@@ -2,8 +2,10 @@
  * 组合根(composition root):把各限界上下文的实现装配成一个可用的 agent,
  * 并对外暴露一个面向 IPC 的 facade。IPC 注册见 ./ipc.ts。
  */
-import { BrowserWindow, type WebContents } from "electron";
+import { app, BrowserWindow, type WebContents } from "electron";
+import { join } from "node:path";
 import { PiAgentAdapter } from "@pa/ctx-task";
+import { MemoryStore, createMemoryTools } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
 import { createModel, envApiKeyResolver } from "@pa/infra";
@@ -32,6 +34,21 @@ let activeSender: WebContents | undefined;
 
 const journal = new OperationJournal();
 journal.registerReverser("filesystem", filesystemReverser);
+
+let memory: MemoryStore | undefined;
+function getMemory(): MemoryStore {
+  if (!memory) memory = new MemoryStore(join(app.getPath("userData"), "memory.json"));
+  return memory;
+}
+
+const memoryToolNames = new Set(["remember"]);
+
+function broadcastMemory(): void {
+  const view = getMemory().list();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("memory:changed", view);
+  }
+}
 
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
 const pendingBatches = new Map<string, (approved: boolean) => void>();
@@ -72,7 +89,11 @@ function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[
 
 function getAdapter(): PiAgentAdapter {
   if (!adapter) {
-    const tools = [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)];
+    const tools = [
+      ...filesystemTools,
+      createPlanFileChangesTool(requestBatchApproval),
+      ...createMemoryTools(getMemory(), broadcastMemory)
+    ];
     adapter = new PiAgentAdapter({
       model: createModel({ provider: PROVIDER, modelId: MODEL }),
       apiKeyResolver: async (provider) => API_KEY ?? (await envApiKeyResolver(provider)),
@@ -82,13 +103,17 @@ function getAdapter(): PiAgentAdapter {
       }),
       thinkingLevel: "high", // 开启推理:显著改善规划与工具使用
       tools,
+      // 召回:每次 LLM 调用注入个人记忆
+      contextProvider: () => getMemory().render(),
       gatekeeper: createGatekeeper({
-        // plan_file_changes 自带批量预览审批,gatekeeper 直接放行;其余按能力风险分级
+        // plan_file_changes/remember 自带可见性,gatekeeper 放行;其余按能力风险分级
         riskOf: (call): RiskLevel =>
-          call.tool === "plan_file_changes" ? "ReadOnly" : riskClassifierFromMap({ ...filesystemToolRisk })(call),
+          call.tool === "plan_file_changes" || call.tool === "remember"
+            ? "ReadOnly"
+            : riskClassifierFromMap({ ...filesystemToolRisk })(call),
         requestApproval
       }),
-      capabilityOf: (tool): Capability => (filesystemToolNames.has(tool) ? "filesystem" : "filesystem"),
+      capabilityOf: (tool): Capability => (memoryToolNames.has(tool) ? "memory" : "filesystem"),
       onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
       onEvent: (event: DomainEvent) => sendTo("domain:event", event),
       afterTool: ({ actionId, capability, tool, details, isError }) => {
@@ -143,6 +168,13 @@ export const agent = {
       pendingBatches.delete(actionId);
       resolve(approved);
     }
+  },
+
+  listMemory: () => getMemory().list(),
+
+  removeMemory(id: string): void {
+    getMemory().remove(id);
+    broadcastMemory();
   },
 
   listJournal: () => journal.list(),

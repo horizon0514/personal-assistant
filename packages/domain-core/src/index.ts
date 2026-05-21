@@ -26,8 +26,8 @@ export interface Intent {
   readonly conversationId: ConversationId;
 }
 
-/** Capability 域 —— 三个独立限界上下文 */
-export type Capability = "filesystem" | "webresearch" | "browser";
+/** Capability 域 —— 独立限界上下文(memory 为核心域,但工具调用沿用同一标签体系)*/
+export type Capability = "filesystem" | "webresearch" | "browser" | "memory";
 
 /** Action 风险分级(Trust & Governance 的核心值对象)*/
 export type RiskLevel =

@@ -14,6 +14,7 @@ export default defineConfig({
           "@pa/ctx-task",
           "@pa/ctx-trust",
           "@pa/ctx-reversibility",
+          "@pa/ctx-memory",
           "@pa/cap-filesystem"
         ]
       })

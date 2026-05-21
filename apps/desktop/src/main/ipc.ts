@@ -23,4 +23,8 @@ export function registerIpc(): void {
   // Reversibility:journal / 撤销
   ipcMain.handle("reversibility:list", () => agent.listJournal());
   ipcMain.handle("reversibility:undoLast", () => agent.undoLast());
+
+  // Personal Memory:列出 / 删除
+  ipcMain.handle("memory:list", () => agent.listMemory());
+  ipcMain.on("memory:remove", (_e, id: string) => agent.removeMemory(id));
 }

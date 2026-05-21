@@ -12,6 +12,7 @@ import {
   Agent,
   type AfterToolCallContext,
   type AgentEvent,
+  type AgentMessage,
   type AgentTool,
   type BeforeToolCallContext,
   type BeforeToolCallResult,
@@ -123,6 +124,8 @@ export interface PiAgentAdapterDeps {
   readonly systemPrompt?: string;
   /** 推理强度(默认 off)。开启可显著改善规划/工具使用。 */
   readonly thinkingLevel?: ThinkingLevel;
+  /** 上下文注入(如 Personal Memory 召回):返回的文本会作为前置消息注入每次 LLM 调用 */
+  readonly contextProvider?: () => string | undefined;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
@@ -163,6 +166,15 @@ export class PiAgentAdapter {
         // 放行 → 返回 undefined;拦截 → {block:true}
         return decision.allow ? undefined : { block: true, reason: decision.reason };
       },
+      // 召回:把记忆等外部上下文作为前置消息注入(不写入持久 transcript)
+      transformContext: deps.contextProvider
+        ? async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
+            const ctx = deps.contextProvider?.();
+            if (!ctx) return messages;
+            const injected: AgentMessage = { role: "user", content: ctx, timestamp: Date.now() };
+            return [injected, ...messages];
+          }
+        : undefined,
       afterToolCall: async (ctx: AfterToolCallContext) => {
         const toolName = ctx.toolCall.name;
         await deps.afterTool?.({
