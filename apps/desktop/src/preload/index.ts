@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
+import type { FileChangeOp } from "@pa/cap-filesystem";
+
+export interface BatchRequest {
+  actionId: string;
+  operations: FileChangeOp[];
+}
 
 export type ChatStreamEvent =
   | { type: "delta"; text: string }
@@ -48,6 +54,16 @@ const api = {
     /** 回传用户决定 */
     resolve: (actionId: string, approved: boolean): void =>
       ipcRenderer.send("approval:resolve", { actionId, approved })
+  },
+  batch: {
+    /** 订阅批量改动预览请求 */
+    onRequest: (cb: (req: BatchRequest) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: BatchRequest): void => cb(payload);
+      ipcRenderer.on("batch:request", listener);
+      return () => ipcRenderer.removeListener("batch:request", listener);
+    },
+    resolve: (actionId: string, approved: boolean): void =>
+      ipcRenderer.send("batch:resolve", { actionId, approved })
   },
   reversibility: {
     list: (): Promise<JournalView[]> => ipcRenderer.invoke("reversibility:list"),

@@ -4,12 +4,14 @@ import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/c
 import { OperationJournal } from "@pa/ctx-reversibility";
 import { createModel, envApiKeyResolver } from "@pa/infra";
 import {
+  createPlanFileChangesTool,
   filesystemReverser,
   filesystemTools,
   filesystemToolNames,
-  filesystemToolRisk
+  filesystemToolRisk,
+  type FileChangeOp
 } from "@pa/cap-filesystem";
-import { newConversationId, type Capability, type DomainEvent } from "@pa/domain-core";
+import { newConversationId, type Capability, type DomainEvent, type RiskLevel } from "@pa/domain-core";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "anthropic";
 const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "claude-sonnet-4-6";
@@ -17,8 +19,14 @@ const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
 
 const SYSTEM_PROMPT =
   "你是一个帮助知识工作者完成任务的个人助理。简洁、准确地回答。" +
-  "你可以使用工具读取本地文件系统(list_dir 列目录、read_file 读文件)。" +
-  "当用户的问题涉及本地文件或目录时,主动调用这些工具获取真实信息,不要凭空臆测。";
+  "你可以使用工具操作本地文件系统:list_dir 列目录、read_file 读文件、write_file 写单个文件。" +
+  "涉及移动/重命名/删除文件时(无论一个还是多个),必须用 plan_file_changes 一次性提交全部改动," +
+  "它会向用户展示完整预览并整批审批。" +
+  "写入或移动文件时,缺失的目标目录会自动创建——你不需要、也无法单独创建目录,直接写/移到目标路径即可。" +
+  "当用户的问题涉及本地文件或目录时,主动调用工具获取真实信息,不要凭空臆测。" +
+  "重要:做完任何改动状态的操作后,必须用只读工具(如 list_dir / read_file)核实结果," +
+  "确认达到预期后再向用户汇报;汇报应基于你实际观察到的事实,而不是假设操作成功。" +
+  "绝不要让用户自己去验证(例如不要说『你可以用 ls 检查』)——验证是你的职责。";
 
 /** 一个 chat 窗口 = 一个会话(多轮共享 transcript)*/
 const conversationId = newConversationId();
@@ -65,15 +73,28 @@ function requestApproval(ask: ApprovalAsk): Promise<boolean> {
   });
 }
 
+// 批量改动预览:actionId → resolve(approved)
+const pendingBatches = new Map<string, (approved: boolean) => void>();
+
+/** 批量审批桥:把改动列表交给 UI 做 diff 预览,等整批同意/拒绝 */
+function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[] }): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingBatches.set(req.actionId, resolve);
+    sendTo("batch:request", req);
+  });
+}
+
 function getAdapter(): PiAgentAdapter {
   if (!adapter) {
     adapter = new PiAgentAdapter({
       model: createModel({ provider: PROVIDER, modelId: MODEL }),
       apiKeyResolver: async (provider) => API_KEY ?? (await envApiKeyResolver(provider)),
       systemPrompt: SYSTEM_PROMPT,
-      tools: filesystemTools,
+      tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)],
       gatekeeper: createGatekeeper({
-        riskOf: riskClassifierFromMap({ ...filesystemToolRisk }),
+        // plan_file_changes 自带批量预览审批,gatekeeper 直接放行;其余按能力风险分级
+        riskOf: (call): RiskLevel =>
+          call.tool === "plan_file_changes" ? "ReadOnly" : riskClassifierFromMap({ ...filesystemToolRisk })(call),
         requestApproval
       }),
       capabilityOf: (tool): Capability => (filesystemToolNames.has(tool) ? "filesystem" : "filesystem"),
@@ -104,6 +125,15 @@ export function registerChatIpc(): void {
     const resolve = pendingApprovals.get(payload.actionId);
     if (resolve) {
       pendingApprovals.delete(payload.actionId);
+      resolve(payload.approved);
+    }
+  });
+
+  // 渲染层回传批量改动审批结果
+  ipcMain.on("batch:resolve", (_e, payload: { actionId: string; approved: boolean }) => {
+    const resolve = pendingBatches.get(payload.actionId);
+    if (resolve) {
+      pendingBatches.delete(payload.actionId);
       resolve(payload.approved);
     }
   });

@@ -9,7 +9,7 @@
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "preview": "electron-vite preview",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@pa/domain-core": "workspace:*",
