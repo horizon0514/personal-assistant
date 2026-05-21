@@ -13,6 +13,9 @@
   },
   "dependencies": {
     "@pa/domain-core": "workspace:*",
+    "@pa/infra": "workspace:*",
+    "@earendil-works/pi-agent-core": "^0.75.4",
+    "@earendil-works/pi-ai": "^0.75.4",
     "clsx": "^2.1.1",
     "tailwind-merge": "^2.5.5",
     "zustand": "^5.0.2"

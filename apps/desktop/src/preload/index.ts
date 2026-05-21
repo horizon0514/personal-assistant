@@ -1,11 +1,25 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+
+export type ChatStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "done" }
+  | { type: "error"; message: string };
 
 /**
  * 受控 IPC 桥。渲染层只能通过 window.pa 访问主进程能力。
- * 后续在此暴露领域事件订阅 / 命令派发,而非裸 ipcRenderer。
  */
 const api = {
-  ping: (): Promise<string> => ipcRenderer.invoke("app:ping")
+  ping: (): Promise<string> => ipcRenderer.invoke("app:ping"),
+  chat: {
+    send: (text: string): void => ipcRenderer.send("chat:send", text),
+    model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
+    /** 订阅流式事件,返回取消订阅函数 */
+    onStream: (cb: (event: ChatStreamEvent) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: ChatStreamEvent): void => cb(payload);
+      ipcRenderer.on("chat:stream", listener);
+      return () => ipcRenderer.removeListener("chat:stream", listener);
+    }
+  }
 };
 
 contextBridge.exposeInMainWorld("pa", api);

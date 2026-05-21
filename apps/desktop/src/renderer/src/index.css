@@ -8,3 +8,49 @@ body,
   height: 100%;
   margin: 0;
 }
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
+    "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* 不透明,随系统主题自适应 */
+body {
+  background: #f3f7f5;
+}
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #0e1411;
+  }
+}
+
+/* 窗口拖拽区(配合 macOS 隐藏标题栏)*/
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 原生细滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.45);
+}
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.22);
+  }
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
