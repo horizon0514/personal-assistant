@@ -11,6 +11,7 @@ interface ChatMessage {
 
 interface ActionRow {
   id: string;
+  stepId: string;
   tool: string;
   capability: string;
   status: "running" | "awaiting" | "done" | "failed";
@@ -50,7 +51,13 @@ export function App(): JSX.Element {
       if (ev.type === "ActionProposed") {
         setActions((prev) => [
           ...prev,
-          { id: ev.action.id, tool: ev.action.tool, capability: ev.action.capability, status: "running" }
+          {
+            id: ev.action.id,
+            stepId: ev.action.stepId,
+            tool: ev.action.tool,
+            capability: ev.action.capability,
+            status: "running"
+          }
         ]);
       } else if (ev.type === "ActionExecuted") {
         setActions((prev) => prev.map((a) => (a.id === ev.actionId ? { ...a, status: "done" } : a)));
@@ -77,6 +84,7 @@ export function App(): JSX.Element {
               ...patched,
               {
                 id: req.actionId,
+                stepId: "pending",
                 tool: req.tool,
                 capability: req.capability,
                 status: "awaiting" as const,
@@ -234,48 +242,82 @@ export function App(): JSX.Element {
               助理执行的动作会在这里实时显示。
             </div>
           ) : (
-            <div className="flex-1 space-y-2 overflow-auto px-4 pb-5">
-              {actions.map((a) => (
-                <div
-                  key={a.id}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200/70 bg-white px-3 py-2.5 text-[13px] dark:border-slate-800 dark:bg-slate-800/60"
-                >
-                  <StatusDot status={a.status} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-slate-700 dark:text-slate-100">{a.tool}</span>
-                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
-                        {a.capability}
-                      </span>
-                      {a.riskLevel && a.status === "awaiting" && (
-                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
-                          {a.riskLevel}
-                        </span>
-                      )}
-                    </div>
-                    {a.status === "awaiting" && (
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          className="rounded-lg bg-emerald-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-emerald-600"
-                          onClick={() => respond(a.id, true)}
-                        >
-                          同意
-                        </button>
-                        <button
-                          className="rounded-lg bg-slate-100 px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
-                          onClick={() => respond(a.id, false)}
-                        >
-                          拒绝
-                        </button>
-                      </div>
-                    )}
-                    {a.error && <p className="mt-1 break-words text-[12px] text-rose-500">{a.error}</p>}
+            <div className="flex-1 space-y-4 overflow-auto px-4 pb-5">
+              {groupByStep(actions).map((group, i) => (
+                <div key={group.stepId}>
+                  <div className="mb-1.5 flex items-center gap-2 px-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+                      步骤 {i + 1}
+                    </span>
+                    <span className="h-px flex-1 bg-slate-200/70 dark:bg-slate-700/70" />
+                  </div>
+                  <div className="space-y-2">
+                    {group.actions.map((a) => (
+                      <ActionCard key={a.id} action={a} onRespond={respond} />
+                    ))}
                   </div>
                 </div>
               ))}
             </div>
           )}
         </section>
+      </div>
+    </div>
+  );
+}
+
+function groupByStep(actions: ActionRow[]): { stepId: string; actions: ActionRow[] }[] {
+  const groups: { stepId: string; actions: ActionRow[] }[] = [];
+  for (const a of actions) {
+    let g = groups.find((x) => x.stepId === a.stepId);
+    if (!g) {
+      g = { stepId: a.stepId, actions: [] };
+      groups.push(g);
+    }
+    g.actions.push(a);
+  }
+  return groups;
+}
+
+function ActionCard({
+  action: a,
+  onRespond
+}: {
+  action: ActionRow;
+  onRespond: (id: string, approved: boolean) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-slate-200/70 bg-white px-3 py-2.5 text-[13px] dark:border-slate-800 dark:bg-slate-800/60">
+      <StatusDot status={a.status} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-slate-700 dark:text-slate-100">{a.tool}</span>
+          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+            {a.capability}
+          </span>
+          {a.riskLevel && a.status === "awaiting" && (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+              {a.riskLevel}
+            </span>
+          )}
+        </div>
+        {a.status === "awaiting" && (
+          <div className="mt-2 flex gap-2">
+            <button
+              className="rounded-lg bg-emerald-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-emerald-600"
+              onClick={() => onRespond(a.id, true)}
+            >
+              同意
+            </button>
+            <button
+              className="rounded-lg bg-slate-100 px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+              onClick={() => onRespond(a.id, false)}
+            >
+              拒绝
+            </button>
+          </div>
+        )}
+        {a.error && <p className="mt-1 break-words text-[12px] text-rose-500">{a.error}</p>}
       </div>
     </div>
   );

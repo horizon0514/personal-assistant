@@ -18,6 +18,7 @@ import {
 } from "@earendil-works/pi-agent-core";
 import type { ApiKeyResolver, ModelHandle } from "@pa/infra";
 import {
+  newStepId,
   newTaskId,
   type Action,
   type ActionId,
@@ -38,40 +39,73 @@ export const allowAllGatekeeper: Gatekeeper = {
   }
 };
 
-// ── 事件翻译(纯函数,单独可测)────────────────────────────────
-/** 把 pi 的 AgentEvent 翻译为领域事件。pi 无 Step 概念,stepId 暂用占位。 */
-export function translateEvent(
-  event: AgentEvent,
-  taskId: TaskId,
-  capabilityOf: (tool: string) => Capability
-): DomainEvent[] {
-  switch (event.type) {
-    case "tool_execution_start": {
-      const action: Action = {
-        id: event.toolCallId as ActionId,
-        stepId: taskId as unknown as StepId, // TODO: Plan/Step 显式建模后替换
-        capability: capabilityOf(event.toolName),
-        tool: event.toolName,
-        args: (event.args ?? {}) as Record<string, unknown>,
-        status: "Executing"
-      };
-      return [{ type: "ActionProposed", taskId, action }];
+// ── 事件翻译(有状态:在 ACL 层自建 Plan/Step)──────────────────
+/**
+ * 把 pi 的 AgentEvent 翻译为领域事件。pi 无 Step 概念,故在此按 turn 自建:
+ * 每个 turn 内**首次**出现工具调用时惰性创建一个 Step(纯聊天 turn 不产生空步骤),
+ * 该 turn 内的 Action 都归属此 Step;turn 结束时关闭该 Step。
+ */
+export class DomainTranslator {
+  private currentStepId: StepId | undefined;
+
+  constructor(
+    private readonly taskId: TaskId,
+    private readonly capabilityOf: (tool: string) => Capability
+  ) {}
+
+  translate(event: AgentEvent): DomainEvent[] {
+    switch (event.type) {
+      case "turn_start":
+        this.currentStepId = undefined; // 新 turn,尚未产生步骤
+        return [];
+
+      case "tool_execution_start": {
+        const out: DomainEvent[] = [];
+        if (!this.currentStepId) {
+          // 本 turn 首个工具 → 惰性开一个 Step
+          this.currentStepId = newStepId();
+          out.push({ type: "StepStarted", taskId: this.taskId, stepId: this.currentStepId });
+        }
+        const action: Action = {
+          id: event.toolCallId as ActionId,
+          stepId: this.currentStepId,
+          capability: this.capabilityOf(event.toolName),
+          tool: event.toolName,
+          args: (event.args ?? {}) as Record<string, unknown>,
+          status: "Executing"
+        };
+        out.push({ type: "ActionProposed", taskId: this.taskId, action });
+        return out;
+      }
+
+      case "tool_execution_end":
+        return event.isError
+          ? [
+              {
+                type: "ActionFailed",
+                taskId: this.taskId,
+                actionId: event.toolCallId as ActionId,
+                error: typeof event.result === "string" ? event.result : JSON.stringify(event.result)
+              }
+            ]
+          : [{ type: "ActionExecuted", taskId: this.taskId, actionId: event.toolCallId as ActionId }];
+
+      case "turn_end": {
+        // 仅在本 turn 真的开过 Step 时才关闭
+        if (this.currentStepId) {
+          const stepId = this.currentStepId;
+          this.currentStepId = undefined;
+          return [{ type: "StepCompleted", taskId: this.taskId, stepId }];
+        }
+        return [];
+      }
+
+      case "agent_end":
+        return [{ type: "TaskCompleted", taskId: this.taskId }];
+
+      default:
+        return [];
     }
-    case "tool_execution_end":
-      return event.isError
-        ? [
-            {
-              type: "ActionFailed",
-              taskId,
-              actionId: event.toolCallId as ActionId,
-              error: typeof event.result === "string" ? event.result : JSON.stringify(event.result)
-            }
-          ]
-        : [{ type: "ActionExecuted", taskId, actionId: event.toolCallId as ActionId }];
-    case "agent_end":
-      return [{ type: "TaskCompleted", taskId }];
-    default:
-      return [];
   }
 }
 
@@ -143,13 +177,14 @@ export class PiAgentAdapter {
   async startTask(intent: Intent): Promise<TaskId> {
     const taskId = newTaskId();
     this.deps.onEvent({ type: "TaskCreated", taskId, intent });
+    const translator = new DomainTranslator(taskId, this.deps.capabilityOf);
     const unsubscribe = this.agent.subscribe((event) => {
       // 助理文本增量 → Conversation 通道
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         this.deps.onAssistantDelta?.(event.assistantMessageEvent.delta);
       }
       // 任务/动作生命周期 → 领域事件通道
-      for (const domainEvent of translateEvent(event, taskId, this.deps.capabilityOf)) {
+      for (const domainEvent of translator.translate(event)) {
         this.deps.onEvent(domainEvent);
       }
     });

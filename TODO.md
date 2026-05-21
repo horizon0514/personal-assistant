@@ -14,7 +14,7 @@
 - [x] **Trust 守门人落地**:ctx-trust createGatekeeper 替换了 allowAllGatekeeper(风险分级 + 策略 + 审批 IPC)。capabilityOf 待扩成多能力注册表。
 - [x] **Reversibility 记账**:OperationJournal + 按能力注册 reverser + undoLast;接 afterToolCall 记账;撤销 UI。
 - [ ] **Memory 召回**:接 `transformContext`,把偏好/事实注入上下文 + 标注网页不可信内容(InjectionGuard)。(阶段 B)
-- [ ] **Plan/Step 显式建模**:当前 translateEvent 用 taskId 占位 stepId;需在 ACL 层自建 Plan/Step 并与 pi 的 turn/tool 事件对齐。(阶段 A)
+- [x] **Plan/Step 显式建模**:DomainTranslator 按 turn 惰性建 Step(纯聊天 turn 不产生空步骤),Action 归属真实 stepId;工作区按"步骤 N"分组渲染。
 - [ ] **BYO key → Keychain**:`envApiKeyResolver` 仅占位,换成 OS Keychain 实现。(阶段 C)
 - [x] **真实对话验证**:DeepSeek 端到端跑通。
 - [x] **desktop 接线**:主进程已实例化 gateway + adapter,领域事件经 IPC 推给渲染层工作区。
