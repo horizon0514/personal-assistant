@@ -14,7 +14,8 @@ import {
   type AgentEvent,
   type AgentTool,
   type BeforeToolCallContext,
-  type BeforeToolCallResult
+  type BeforeToolCallResult,
+  type ThinkingLevel
 } from "@earendil-works/pi-agent-core";
 import type { ApiKeyResolver, ModelHandle } from "@pa/infra";
 import {
@@ -120,6 +121,8 @@ export interface PiAgentAdapterDeps {
   /** tool 名 → 所属 Capability 的解析 */
   readonly capabilityOf: (tool: string) => Capability;
   readonly systemPrompt?: string;
+  /** 推理强度(默认 off)。开启可显著改善规划/工具使用。 */
+  readonly thinkingLevel?: ThinkingLevel;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
@@ -143,7 +146,8 @@ export class PiAgentAdapter {
       initialState: {
         systemPrompt: deps.systemPrompt ?? "",
         model: deps.model,
-        tools: deps.tools ?? []
+        tools: deps.tools ?? [],
+        thinkingLevel: deps.thinkingLevel ?? "off"
       },
       getApiKey: (provider) => deps.apiKeyResolver(provider),
       beforeToolCall: async (
