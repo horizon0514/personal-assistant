@@ -12,6 +12,8 @@ export interface ToolInfo {
 
 export interface BuildSystemPromptOptions {
   tools: ToolInfo[];
+  /** 各能力自带的使用指南(跨工具编排),由组合根收集后注入 */
+  guidelines?: string[];
   now?: Date;
 }
 
@@ -21,11 +23,12 @@ const OS_LABEL: Record<string, string> = {
   linux: "Linux"
 };
 
-export function buildSystemPrompt({ tools, now = new Date() }: BuildSystemPromptOptions): string {
+export function buildSystemPrompt({ tools, guidelines = [], now = new Date() }: BuildSystemPromptOptions): string {
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const osName = OS_LABEL[platform()] ?? type();
 
   const toolsList = tools.map((t) => `- ${t.name}:${t.description}`).join("\n");
+  const guidelinesSection = guidelines.length > 0 ? `\n\n# 能力使用指南\n${guidelines.join("\n\n")}` : "";
 
   return `你是一个帮助知识工作者完成任务的个人助理,运行在用户本机,可调用工具操作本地文件系统。
 
@@ -48,13 +51,8 @@ export function buildSystemPrompt({ tools, now = new Date() }: BuildSystemPrompt
 - 只有两种情况才停下来找用户:(a) 需要用户决策或提供你拿不到的信息;(b) 需要用户授权某个操作。
 - 工具报错时:读懂错误信息,修正参数后重试,或换一种可行路径——不要直接放弃,也不要绕一大圈。
 
-# 记忆
-- 当对话中出现关于用户的、未来仍有用的持久偏好或事实时,主动用 remember 记下来,以后据此个性化你的行为。
-- 上文若出现"关于这位用户"的段落,那是你之前记住的内容,优先据此行动。
-
 # 可用工具
-${toolsList}
-说明:写入或移动文件时,缺失的目标目录会自动创建——你不需要、也无法单独创建目录,直接写/移到目标路径即可。
+${toolsList}${guidelinesSection}
 
 # 风格
 简洁、准确、用中文。多调工具拿真实信息,少废话。`;

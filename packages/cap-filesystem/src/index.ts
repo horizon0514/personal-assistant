@@ -5,7 +5,7 @@
  * 风险等级 ReadOnly,会被 Trust 守门人自动放行。
  * 破坏性工具(rename/move/delete/write)留待接入 Reversibility 后再开。
  */
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Type, type Static } from "@earendil-works/pi-ai";
@@ -59,6 +59,102 @@ const readFileTool: AgentTool<typeof readFileParams> = {
       bytes: buf.byteLength,
       truncated
     });
+  }
+};
+
+// ── agentic 搜索(grep / glob,只读)──────────────────────────
+const WALK_MAX_FILES = 5000; // 扫描文件上限,防失控
+const WALK_MAX_DEPTH = 10;
+const GREP_MAX_RESULTS = 100;
+const GREP_MAX_FILE_BYTES = 1_000_000; // 单文件超此大小跳过
+const SKIP_DIRS = new Set(["node_modules", ".git", ".cache", "Library", ".Trash"]);
+
+/** glob(仅 * 和 ?,匹配 basename)→ 大小写不敏感正则 */
+function globToRegExp(glob: string): RegExp {
+  const re = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${re}$`, "i");
+}
+
+/** 递归收集文件路径(带深度/数量上限,跳过常见噪声目录)*/
+async function walkFiles(root: string): Promise<string[]> {
+  const out: string[] = [];
+  async function recurse(dir: string, depth: number): Promise<void> {
+    if (depth > WALK_MAX_DEPTH || out.length >= WALK_MAX_FILES) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= WALK_MAX_FILES) return;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) await recurse(full, depth + 1);
+      } else if (e.isFile()) {
+        out.push(full);
+      }
+    }
+  }
+  await recurse(root, 0);
+  return out;
+}
+
+const findFilesParams = Type.Object({
+  dir: Type.String({ description: "要搜索的目录绝对路径" }),
+  namePattern: Type.String({ description: "文件名 glob,如 *.pdf、报销*.xlsx、*。支持 * 和 ?" })
+});
+
+const findFilesTool: AgentTool<typeof findFilesParams> = {
+  name: "find_files",
+  label: "查找文件",
+  description: "在目录(含子目录)下按文件名模式查找文件(只读)。用于'找出所有 xxx 文件'这类需求。",
+  parameters: findFilesParams,
+  execute: async (_id, { dir, namePattern }) => {
+    const re = globToRegExp(namePattern);
+    const all = await walkFiles(dir);
+    const matched = all.filter((p) => re.test(basename(p)));
+    const text = matched.length ? matched.join("\n") : "(未找到匹配文件)";
+    return textResult(text, { dir, namePattern, count: matched.length, scanned: all.length });
+  }
+};
+
+const grepFilesParams = Type.Object({
+  dir: Type.String({ description: "要搜索的目录绝对路径" }),
+  query: Type.String({ description: "要在文件内容中查找的文本(大小写不敏感子串)" }),
+  namePattern: Type.Optional(Type.String({ description: "可选:仅在匹配此文件名 glob 的文件中搜索,如 *.txt" }))
+});
+
+const grepFilesTool: AgentTool<typeof grepFilesParams> = {
+  name: "grep_files",
+  label: "搜索内容",
+  description: "在目录(含子目录)下按内容搜索文本,返回 文件:行号:匹配行(只读)。用于'哪些文件提到了 xxx'。",
+  parameters: grepFilesParams,
+  execute: async (_id, { dir, query, namePattern }) => {
+    const nameRe = namePattern ? globToRegExp(namePattern) : undefined;
+    const needle = query.toLowerCase();
+    const files = (await walkFiles(dir)).filter((p) => !nameRe || nameRe.test(basename(p)));
+    const hits: string[] = [];
+    for (const file of files) {
+      if (hits.length >= GREP_MAX_RESULTS) break;
+      try {
+        const st = await stat(file);
+        if (st.size > GREP_MAX_FILE_BYTES) continue;
+        const buf = await readFile(file);
+        if (buf.includes(0)) continue; // 二进制启发式:含 NUL 跳过
+        const lines = buf.toString("utf8").split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i]!.toLowerCase().includes(needle)) {
+            hits.push(`${file}:${i + 1}: ${lines[i]!.trim().slice(0, 200)}`);
+            if (hits.length >= GREP_MAX_RESULTS) break;
+          }
+        }
+      } catch {
+        /* 跳过读不了的文件 */
+      }
+    }
+    const text = hits.length ? hits.join("\n") : "(未找到匹配内容)";
+    return textResult(text, { dir, query, count: hits.length });
   }
 };
 
@@ -176,7 +272,13 @@ export function createPlanFileChangesTool(requestBatchApproval: RequestBatchAppr
 }
 
 /** 静态工具集(只读 + 单文件写)。批量改动工具经 createPlanFileChangesTool 注入。 */
-export const filesystemTools: AgentTool<any>[] = [listDirTool, readFileTool, writeFileTool];
+export const filesystemTools: AgentTool<any>[] = [
+  listDirTool,
+  readFileTool,
+  findFilesTool,
+  grepFilesTool,
+  writeFileTool
+];
 
 /** 回滚器:按 reversal.kind 执行对应的逆操作 */
 export async function filesystemReverser(plan: { kind: string } & Record<string, unknown>): Promise<void> {
@@ -213,8 +315,20 @@ export const filesystemToolNames: ReadonlySet<string> = new Set([
 export const filesystemToolRisk: Readonly<Record<string, RiskLevel>> = {
   list_dir: "ReadOnly",
   read_file: "ReadOnly",
+  find_files: "ReadOnly",
+  grep_files: "ReadOnly",
   write_file: "ReversibleMutating"
   // plan_file_changes 不在此:它在执行内部自行做批量预览审批(见 main 的 riskOf 特例)
 };
+
+/** 注入系统提示的「能力使用指南」(跨工具编排,由组合根收集)*/
+export const filesystemGuidelines = `## 文件操作
+- 写入或移动文件时,缺失的目标目录会自动创建——你不需要、也无法单独创建目录,直接写/移到目标路径即可。
+
+## 搜索(找东西时这样做)
+- 把语义意图拆成多个字面查询:同义词、中英文、文件名/扩展名、可能目录。例如"报税相关"→ 试 发票、报销、tax、invoice、*.pdf。
+- 一次性并行发起多个 find_files / grep_files(放在同一轮),快速铺开,而不是一个一个试。
+- 拿到结果后迭代:命中就深入(read_file / 再 grep);没命中就换关键词、换目录、放宽模式重试——绝不搜一次就放弃或下结论。
+- 组合使用:list_dir 摸清结构 → find_files 定位候选 → grep_files 看内容。搜索是只读、零代价的,宁可多搜几次也别凭猜测回答。`;
 
 export { CAPABILITY as filesystemCapability };

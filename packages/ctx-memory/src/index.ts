@@ -74,6 +74,11 @@ export class MemoryStore {
   }
 }
 
+/** 注入系统提示的记忆使用指南(由组合根收集)*/
+export const memoryGuidelines = `## 记忆
+- 当对话中出现关于用户的、未来仍有用的持久偏好或事实时,主动用 remember 记下来,以后据此个性化你的行为。
+- 上文若出现"关于这位用户"的段落,那是你之前记住的内容,优先据此行动。`;
+
 const rememberParams = Type.Object({
   kind: Type.Union([Type.Literal("preference"), Type.Literal("fact")], {
     description: "preference=用户偏好/习惯;fact=关于用户的客观事实"

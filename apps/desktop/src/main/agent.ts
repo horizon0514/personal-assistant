@@ -5,12 +5,13 @@
 import { app, BrowserWindow, type WebContents } from "electron";
 import { join } from "node:path";
 import { PiAgentAdapter } from "@pa/ctx-task";
-import { MemoryStore, createMemoryTools } from "@pa/ctx-memory";
+import { MemoryStore, createMemoryTools, memoryGuidelines } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
 import { createModel, envApiKeyResolver } from "@pa/infra";
 import {
   createPlanFileChangesTool,
+  filesystemGuidelines,
   filesystemReverser,
   filesystemTools,
   filesystemToolNames,
@@ -97,9 +98,10 @@ function getAdapter(): PiAgentAdapter {
     adapter = new PiAgentAdapter({
       model: createModel({ provider: PROVIDER, modelId: MODEL }),
       apiKeyResolver: async (provider) => API_KEY ?? (await envApiKeyResolver(provider)),
-      // 动态拼接:基础行为 + 环境(日期/OS/主目录)+ 真实工具列表
+      // 动态拼接:基础行为 + 环境 + 真实工具列表 + 各能力自带的使用指南
       systemPrompt: buildSystemPrompt({
-        tools: tools.map((t) => ({ name: t.name, description: t.description }))
+        tools: tools.map((t) => ({ name: t.name, description: t.description })),
+        guidelines: [filesystemGuidelines, memoryGuidelines]
       }),
       thinkingLevel: "high", // 开启推理:显著改善规划与工具使用
       tools,
