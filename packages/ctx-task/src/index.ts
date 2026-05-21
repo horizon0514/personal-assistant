@@ -10,6 +10,7 @@
  */
 import {
   Agent,
+  type AfterToolCallContext,
   type AgentEvent,
   type AgentTool,
   type BeforeToolCallContext,
@@ -89,6 +90,14 @@ export interface PiAgentAdapterDeps {
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
   readonly onAssistantDelta?: (text: string) => void;
+  /** 工具执行完成出口(供 Reversibility 记账等)*/
+  readonly afterTool?: (info: {
+    actionId: ActionId;
+    capability: Capability;
+    tool: string;
+    details: unknown;
+    isError: boolean;
+  }) => void | Promise<void>;
 }
 
 export class PiAgentAdapter {
@@ -115,6 +124,17 @@ export class PiAgentAdapter {
         });
         // 放行 → 返回 undefined;拦截 → {block:true}
         return decision.allow ? undefined : { block: true, reason: decision.reason };
+      },
+      afterToolCall: async (ctx: AfterToolCallContext) => {
+        const toolName = ctx.toolCall.name;
+        await deps.afterTool?.({
+          actionId: ctx.toolCall.id as ActionId,
+          capability: deps.capabilityOf(toolName),
+          tool: toolName,
+          details: ctx.result.details,
+          isError: ctx.isError
+        });
+        return undefined;
       }
     });
   }

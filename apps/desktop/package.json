@@ -16,6 +16,7 @@
     "@pa/infra": "workspace:*",
     "@pa/ctx-task": "workspace:*",
     "@pa/ctx-trust": "workspace:*",
+    "@pa/ctx-reversibility": "workspace:*",
     "@pa/cap-filesystem": "workspace:*",
     "@earendil-works/pi-agent-core": "^0.75.4",
     "@earendil-works/pi-ai": "^0.75.4",

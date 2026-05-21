@@ -23,6 +23,9 @@ importers:
       '@pa/cap-filesystem':
         specifier: workspace:*
         version: link:../../packages/cap-filesystem
+      '@pa/ctx-reversibility':
+        specifier: workspace:*
+        version: link:../../packages/ctx-reversibility
       '@pa/ctx-task':
         specifier: workspace:*
         version: link:../../packages/ctx-task

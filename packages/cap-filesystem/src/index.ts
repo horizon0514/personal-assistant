@@ -5,10 +5,15 @@
  * 风险等级 ReadOnly,会被 Trust 守门人自动放行。
  * 破坏性工具(rename/move/delete/write)留待接入 Reversibility 后再开。
  */
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
+
+/** 软删除回收区(避免硬删,可恢复)*/
+const TRASH_DIR = join(tmpdir(), "pa-trash");
 
 const CAPABILITY: Capability = "filesystem";
 
@@ -68,16 +73,94 @@ const writeFileTool: AgentTool<typeof writeFileParams> = {
   description: "把文本内容写入文件(会创建或覆盖)。这是有副作用的操作,需经用户审批。",
   parameters: writeFileParams,
   execute: async (_id, { path, content }) => {
+    // 捕获 before 状态用于回滚:存在则记旧内容,不存在则记"新建"
+    let prevContent: string | undefined;
+    let existed = true;
+    try {
+      prevContent = await readFile(path, "utf8");
+    } catch {
+      existed = false;
+    }
     await writeFile(path, content, "utf8");
+    const reversal = existed
+      ? { kind: "fs.restore", path, prevContent }
+      : { kind: "fs.delete-created", path };
     return textResult(`已写入 ${path}(${Buffer.byteLength(content)} 字节)`, {
       path,
-      bytes: Buffer.byteLength(content)
+      bytes: Buffer.byteLength(content),
+      reversal
+    });
+  }
+};
+
+const deleteFileParams = Type.Object({
+  path: Type.String({ description: "要删除的文件绝对路径" })
+});
+
+const deleteFileTool: AgentTool<typeof deleteFileParams> = {
+  name: "delete_file",
+  label: "删除文件",
+  description: "删除一个文件(实为移入回收区,可撤销)。破坏性操作,需审批。",
+  parameters: deleteFileParams,
+  execute: async (_id, { path }) => {
+    await mkdir(TRASH_DIR, { recursive: true });
+    const trashed = join(TRASH_DIR, `${Date.now()}-${basename(path)}`);
+    await rename(path, trashed);
+    return textResult(`已移入回收区:${path}`, {
+      path,
+      reversal: { kind: "fs.untrash", original: path, trashed }
+    });
+  }
+};
+
+const moveFileParams = Type.Object({
+  from: Type.String({ description: "源路径" }),
+  to: Type.String({ description: "目标路径" })
+});
+
+const moveFileTool: AgentTool<typeof moveFileParams> = {
+  name: "move_file",
+  label: "移动/重命名",
+  description: "移动或重命名文件。有副作用,需审批。",
+  parameters: moveFileParams,
+  execute: async (_id, { from, to }) => {
+    await rename(from, to);
+    return textResult(`已移动 ${from} → ${to}`, {
+      from,
+      to,
+      reversal: { kind: "fs.move-back", from, to }
     });
   }
 };
 
 /** 本能力暴露的工具集 */
-export const filesystemTools: AgentTool<any>[] = [listDirTool, readFileTool, writeFileTool];
+export const filesystemTools: AgentTool<any>[] = [
+  listDirTool,
+  readFileTool,
+  writeFileTool,
+  deleteFileTool,
+  moveFileTool
+];
+
+/** 回滚器:按 reversal.kind 执行对应的逆操作 */
+export async function filesystemReverser(plan: { kind: string } & Record<string, unknown>): Promise<void> {
+  switch (plan.kind) {
+    case "fs.restore":
+      await writeFile(plan.path as string, plan.prevContent as string, "utf8");
+      return;
+    case "fs.delete-created":
+      await unlink(plan.path as string);
+      return;
+    case "fs.untrash":
+      await rename(plan.trashed as string, plan.original as string);
+      return;
+    case "fs.move-back":
+      await rename(plan.to as string, plan.from as string);
+      return;
+    default:
+      throw new Error(`未知的回滚类型:${plan.kind}`);
+  }
+}
 
 /** 工具名 → Capability 的映射(供 ctx-task 的 capabilityOf 使用)*/
 export const filesystemToolNames: ReadonlySet<string> = new Set(filesystemTools.map((t) => t.name));
@@ -86,7 +169,9 @@ export const filesystemToolNames: ReadonlySet<string> = new Set(filesystemTools.
 export const filesystemToolRisk: Readonly<Record<string, RiskLevel>> = {
   list_dir: "ReadOnly",
   read_file: "ReadOnly",
-  write_file: "ReversibleMutating"
+  write_file: "ReversibleMutating",
+  move_file: "ReversibleMutating",
+  delete_file: "Destructive"
 };
 
 export { CAPABILITY as filesystemCapability };

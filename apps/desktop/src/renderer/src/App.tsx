@@ -18,17 +18,31 @@ interface ActionRow {
   error?: string;
 }
 
+interface JournalItem {
+  actionId: string;
+  tool: string;
+  capability: string;
+  summary: string;
+  reverted: boolean;
+}
+
 export function App(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState("");
   const [actions, setActions] = useState<ActionRow[]>([]);
+  const [journal, setJournal] = useState<JournalItem[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void window.pa.chat.model().then(setModel);
+    void window.pa.reversibility.list().then(setJournal);
+    const off = window.pa.reversibility.onChanged(setJournal);
+    return off;
   }, []);
+
+  const undoable = journal.some((j) => !j.reverted);
 
   // 订阅任务/动作领域事件 → 右侧工作区
   useEffect(() => {
@@ -202,7 +216,19 @@ export function App(): JSX.Element {
 
         {/* 右:计划 / 工作区面板 */}
         <section className="flex w-1/2 flex-col">
-          <div className="px-5 py-4 text-[13px] font-medium text-slate-500 dark:text-slate-400">计划 / 工作区</div>
+          <div className="flex items-center justify-between px-5 py-3">
+            <span className="text-[13px] font-medium text-slate-500 dark:text-slate-400">计划 / 工作区</span>
+            {journal.length > 0 && (
+              <button
+                className="rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] text-slate-600 transition hover:bg-slate-100 disabled:opacity-40 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                onClick={() => void window.pa.reversibility.undoLast()}
+                disabled={!undoable}
+                title="撤销最近一次可逆操作"
+              >
+                ↩ 撤销上一步
+              </button>
+            )}
+          </div>
           {actions.length === 0 ? (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-slate-400 dark:text-slate-500">
               助理执行的动作会在这里实时显示。

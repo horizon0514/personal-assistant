@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
+import type { JournalView } from "@pa/ctx-reversibility";
 
 export type ChatStreamEvent =
   | { type: "delta"; text: string }
@@ -47,6 +48,16 @@ const api = {
     /** 回传用户决定 */
     resolve: (actionId: string, approved: boolean): void =>
       ipcRenderer.send("approval:resolve", { actionId, approved })
+  },
+  reversibility: {
+    list: (): Promise<JournalView[]> => ipcRenderer.invoke("reversibility:list"),
+    undoLast: (): Promise<{ actionId: string; tool: string; summary: string } | null> =>
+      ipcRenderer.invoke("reversibility:undoLast"),
+    onChanged: (cb: (entries: JournalView[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: JournalView[]): void => cb(payload);
+      ipcRenderer.on("reversibility:changed", listener);
+      return () => ipcRenderer.removeListener("reversibility:changed", listener);
+    }
   }
 };
 

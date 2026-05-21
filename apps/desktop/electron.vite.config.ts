@@ -13,6 +13,7 @@ export default defineConfig({
           "@pa/domain-core",
           "@pa/ctx-task",
           "@pa/ctx-trust",
+          "@pa/ctx-reversibility",
           "@pa/cap-filesystem"
         ]
       })

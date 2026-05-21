@@ -1,8 +1,14 @@
-import { type IpcMainEvent, type WebContents, ipcMain } from "electron";
+import { BrowserWindow, type IpcMainEvent, type WebContents, ipcMain } from "electron";
 import { PiAgentAdapter } from "@pa/ctx-task";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
+import { OperationJournal } from "@pa/ctx-reversibility";
 import { createModel, envApiKeyResolver } from "@pa/infra";
-import { filesystemTools, filesystemToolNames, filesystemToolRisk } from "@pa/cap-filesystem";
+import {
+  filesystemReverser,
+  filesystemTools,
+  filesystemToolNames,
+  filesystemToolRisk
+} from "@pa/cap-filesystem";
 import { newConversationId, type Capability, type DomainEvent } from "@pa/domain-core";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "anthropic";
@@ -26,8 +32,20 @@ let adapter: PiAgentAdapter | undefined;
 // 当前活动请求的渲染端(chat 单轮串行,期间回调都发往它)
 let activeSender: WebContents | undefined;
 
+// 操作日志(可逆性):注册 filesystem 回滚器
+const journal = new OperationJournal();
+journal.registerReverser("filesystem", filesystemReverser);
+
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
+}
+
+/** 广播 journal 变化到所有窗口(记账/撤销都会触发)*/
+function broadcastJournal(): void {
+  const view = journal.list();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("reversibility:changed", view);
+  }
 }
 
 // 待裁决审批:actionId → resolve(approved)
@@ -60,7 +78,19 @@ function getAdapter(): PiAgentAdapter {
       }),
       capabilityOf: (tool): Capability => (filesystemToolNames.has(tool) ? "filesystem" : "filesystem"),
       onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
-      onEvent: (event: DomainEvent) => sendTo("domain:event", event)
+      onEvent: (event: DomainEvent) => sendTo("domain:event", event),
+      afterTool: ({ actionId, capability, tool, details, isError }) => {
+        if (isError) return;
+        const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)
+          ?.reversal;
+        if (!reversal) return; // 只读工具无 reversal
+        const summary =
+          (details as { path?: string; to?: string } | undefined)?.path ??
+          (details as { to?: string } | undefined)?.to ??
+          tool;
+        journal.record({ actionId, capability, tool, summary, reversal });
+        broadcastJournal();
+      }
     });
   }
   return adapter;
@@ -76,6 +106,14 @@ export function registerChatIpc(): void {
       pendingApprovals.delete(payload.actionId);
       resolve(payload.approved);
     }
+  });
+
+  // 可逆性:列出 journal / 撤销上一步
+  ipcMain.handle("reversibility:list", () => journal.list());
+  ipcMain.handle("reversibility:undoLast", async () => {
+    const entry = await journal.undoLast();
+    broadcastJournal();
+    return entry ? { actionId: entry.actionId, tool: entry.tool, summary: entry.summary } : null;
   });
 
   ipcMain.on("chat:send", async (e: IpcMainEvent, text: string) => {
