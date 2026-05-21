@@ -1,6 +1,14 @@
+@import "highlight.js/styles/github-dark.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* 让代码块背景由 prose-pre(slate-900)统一控制,hljs 只负责 token 着色 */
+.hljs {
+  background: transparent;
+  padding: 0;
+}
 
 html,
 body,

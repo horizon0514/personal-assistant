@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
 
 interface ChatMessage {
   id: string;
@@ -6,15 +9,43 @@ interface ChatMessage {
   content: string;
 }
 
+interface ActionRow {
+  id: string;
+  tool: string;
+  capability: string;
+  status: "running" | "done" | "failed";
+  error?: string;
+}
+
 export function App(): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [model, setModel] = useState("");
+  const [actions, setActions] = useState<ActionRow[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     void window.pa.chat.model().then(setModel);
+  }, []);
+
+  // 订阅任务/动作领域事件 → 右侧工作区
+  useEffect(() => {
+    const off = window.pa.domain.onEvent((ev) => {
+      if (ev.type === "ActionProposed") {
+        setActions((prev) => [
+          ...prev,
+          { id: ev.action.id, tool: ev.action.tool, capability: ev.action.capability, status: "running" }
+        ]);
+      } else if (ev.type === "ActionExecuted") {
+        setActions((prev) => prev.map((a) => (a.id === ev.actionId ? { ...a, status: "done" } : a)));
+      } else if (ev.type === "ActionFailed") {
+        setActions((prev) =>
+          prev.map((a) => (a.id === ev.actionId ? { ...a, status: "failed", error: ev.error } : a))
+        );
+      }
+    });
+    return off;
   }, []);
 
   useEffect(() => {
@@ -76,13 +107,23 @@ export function App(): JSX.Element {
               <div key={m.id} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
                   className={
-                    "max-w-[82%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed " +
+                    "max-w-[82%] rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed " +
                     (m.role === "user"
-                      ? "bg-emerald-500 text-white shadow-sm shadow-emerald-500/20 dark:bg-emerald-600"
+                      ? "whitespace-pre-wrap bg-emerald-500 text-white shadow-sm shadow-emerald-500/20 dark:bg-emerald-600"
                       : "bg-white text-slate-700 shadow-sm ring-1 ring-slate-200/80 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700")
                   }
                 >
-                  {m.content || (m.role === "assistant" && streaming ? <Dots /> : "")}
+                  {m.role === "user" ? (
+                    m.content
+                  ) : m.content ? (
+                    <div className="prose prose-sm max-w-none text-[13px] leading-relaxed dark:prose-invert prose-headings:my-1.5 prose-headings:font-semibold prose-h1:text-[15px] prose-h2:text-[14px] prose-h3:text-[13px] prose-p:my-1.5 prose-p:text-[13px] prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-li:text-[13px] prose-pre:my-2 prose-pre:bg-slate-900 prose-pre:text-[12px] prose-code:rounded prose-code:bg-slate-100 prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:font-normal prose-code:before:content-[''] prose-code:after:content-[''] dark:prose-code:bg-slate-700">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                        {m.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : streaming ? (
+                    <Dots />
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -127,13 +168,43 @@ export function App(): JSX.Element {
         {/* 右:计划 / 工作区面板 */}
         <section className="flex w-1/2 flex-col">
           <div className="px-5 py-4 text-[13px] font-medium text-slate-500 dark:text-slate-400">计划 / 工作区</div>
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-slate-400 dark:text-slate-500">
-            这里将展示计划步骤、文件改动预览、调研来源与浏览器动作。
-          </div>
+          {actions.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-slate-400 dark:text-slate-500">
+              助理执行的动作会在这里实时显示。
+            </div>
+          ) : (
+            <div className="flex-1 space-y-2 overflow-auto px-4 pb-5">
+              {actions.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200/70 bg-white px-3 py-2.5 text-[13px] dark:border-slate-800 dark:bg-slate-800/60"
+                >
+                  <StatusDot status={a.status} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-700 dark:text-slate-100">{a.tool}</span>
+                      <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                        {a.capability}
+                      </span>
+                    </div>
+                    {a.error && <p className="mt-1 break-words text-[12px] text-rose-500">{a.error}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
       </div>
     </div>
   );
+}
+
+function StatusDot({ status }: { status: ActionRow["status"] }): JSX.Element {
+  if (status === "running")
+    return <span className="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-400" />;
+  if (status === "done")
+    return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500" />;
+  return <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-rose-500" />;
 }
 
 function Dots(): JSX.Element {

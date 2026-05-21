@@ -95,8 +95,10 @@ export interface PiAgentAdapterDeps {
   /** tool 名 → 所属 Capability 的解析 */
   readonly capabilityOf: (tool: string) => Capability;
   readonly systemPrompt?: string;
-  /** 领域事件出口(供 Conversation/UI 订阅)*/
+  /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
+  /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
+  readonly onAssistantDelta?: (text: string) => void;
 }
 
 export class PiAgentAdapter {
@@ -131,6 +133,11 @@ export class PiAgentAdapter {
     const taskId = newTaskId();
     this.deps.onEvent({ type: "TaskCreated", taskId, intent });
     const unsubscribe = this.agent.subscribe((event) => {
+      // 助理文本增量 → Conversation 通道
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        this.deps.onAssistantDelta?.(event.assistantMessageEvent.delta);
+      }
+      // 任务/动作生命周期 → 领域事件通道
       for (const domainEvent of translateEvent(event, taskId, this.deps.capabilityOf)) {
         this.deps.onEvent(domainEvent);
       }

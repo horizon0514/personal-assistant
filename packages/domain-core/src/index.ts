@@ -17,6 +17,7 @@ export type ConversationId = string & { readonly __brand: "ConversationId" };
 export const newTaskId = (): TaskId => crypto.randomUUID() as TaskId;
 export const newActionId = (): ActionId => crypto.randomUUID() as ActionId;
 export const newStepId = (): StepId => crypto.randomUUID() as StepId;
+export const newConversationId = (): ConversationId => crypto.randomUUID() as ConversationId;
 
 // ── 核心值对象 ───────────────────────────────────────────────
 /** 用户用自然语言表达的目标 */

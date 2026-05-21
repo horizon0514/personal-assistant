@@ -6,7 +6,11 @@ export default defineConfig({
   main: {
     // workspace 包(@pa/*)是 TS 源码入口,需打进 bundle 由 Vite 转译;
     // pi 等真实 node 依赖保持外部化。
-    plugins: [externalizeDepsPlugin({ exclude: ["@pa/infra", "@pa/domain-core", "@pa/ctx-task"] })],
+    plugins: [
+      externalizeDepsPlugin({
+        exclude: ["@pa/infra", "@pa/domain-core", "@pa/ctx-task", "@pa/cap-filesystem"]
+      })
+    ],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, "src/main/index.ts") }
