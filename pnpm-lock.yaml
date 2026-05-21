@@ -20,6 +20,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.75.4
         version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@pa/cap-document':
+        specifier: workspace:*
+        version: link:../../packages/cap-document
       '@pa/cap-filesystem':
         specifier: workspace:*
         version: link:../../packages/cap-filesystem
@@ -47,6 +50,12 @@ importers:
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1
+      lucide-react:
+        specifier: ^1.16.0
+        version: 1.16.0(react@18.3.1)
+      pdf-parse:
+        specifier: ^1.1.1
+        version: 1.1.4
       react-markdown:
         specifier: ^9.0.1
         version: 9.1.0(@types/react@18.3.29)(react@18.3.1)
@@ -117,6 +126,28 @@ importers:
       '@pa/domain-core':
         specifier: workspace:*
         version: link:../domain-core
+    devDependencies:
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@25.9.1)
+
+  packages/cap-document:
+    dependencies:
+      '@earendil-works/pi-agent-core':
+        specifier: ^0.75.4
+        version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@earendil-works/pi-ai':
+        specifier: ^0.75.4
+        version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@pa/domain-core':
+        specifier: workspace:*
+        version: link:../domain-core
+      pdf-parse:
+        specifier: ^1.1.1
+        version: 1.1.4
     devDependencies:
       typescript:
         specifier: ^5.6.3
@@ -2131,6 +2162,11 @@ packages:
     resolution: {integrity: sha512-jumlc0BIUrS3qJGgIkWZsyfAM7NCWiBcCDhnd+3NNM5KbBmLTgHVfWBcg6W+rLUsIpzpERPsvwUP7CckAQSOoA==}
     engines: {node: '>=12'}
 
+  lucide-react@1.16.0:
+    resolution: {integrity: sha512-dYwyPzb4MEKpGUmNYk3WKWPnMrHs3FKM+q94kAnJrcDIqqn1hq2xY8scaS2ovsOCM5D51ey2gaRG3PBb1vgoYQ==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -2400,6 +2436,9 @@ packages:
     engines: {node: '>=10.5.0'}
     deprecated: Use your platform's native DOMException instead
 
+  node-ensure@0.0.0:
+    resolution: {integrity: sha512-DRI60hzo2oKN1ma0ckc6nQWlHU69RH6xN0sjQTjMpChPfTYvKZdcQFfdYK2RWbJcKyUizSIy/l8OTGxMAM1QDw==}
+
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
@@ -2516,6 +2555,10 @@ packages:
   pathval@2.0.1:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
+
+  pdf-parse@1.1.4:
+    resolution: {integrity: sha512-XRIRcLgk6ZnUbsHsYXExMw+krrPE81hJ6FQPLdBNhhBefqIQKXu/WeTgNBGSwPrfU0v+UCEwn7AoAUOsVKHFvQ==}
+    engines: {node: '>=6.8.1'}
 
   pe-library@0.4.1:
     resolution: {integrity: sha512-eRWB5LBz7PpDu4PUlwT0PhnQfTQJlDDdPa35urV4Osrm0t0AqQFGn+UIkU3klZvwJ8KPO3VbBFsXquA6p6kqZw==}
@@ -5439,6 +5482,10 @@ snapshots:
 
   lru-cache@7.18.3: {}
 
+  lucide-react@1.16.0(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -5921,6 +5968,8 @@ snapshots:
 
   node-domexception@1.0.0: {}
 
+  node-ensure@0.0.0: {}
+
   node-fetch@3.3.2:
     dependencies:
       data-uri-to-buffer: 4.0.1
@@ -6038,6 +6087,10 @@ snapshots:
   pathe@1.1.2: {}
 
   pathval@2.0.1: {}
+
+  pdf-parse@1.1.4:
+    dependencies:
+      node-ensure: 0.0.0
 
   pe-library@0.4.1: {}
 

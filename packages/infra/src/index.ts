@@ -41,3 +41,8 @@ export function createModel(spec: ModelSpec): ModelHandle {
 
 /** 默认 key 解析:环境变量。占位,后续替换为 Keychain 实现。 */
 export const envApiKeyResolver: ApiKeyResolver = async (provider) => getEnvApiKey(provider);
+
+// ── 本地持久化(workspace / session)──────────────────────────
+export { readJson, writeJson } from "./persistence";
+export { WorkspaceStore, type WorkspaceRecord } from "./workspace-store";
+export { SessionStore, type SessionRecord } from "./session-store";

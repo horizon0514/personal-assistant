@@ -1,11 +1,69 @@
 # TODO
 
+## 设置界面重做:独立窗口 + 全局/workspace 二分(决策见 design-discussion.md「设置界面重做」节)
+
+- [x] **第二渲染入口 + 窗口生命周期**:`settings.html` + `settings.tsx`;electron.vite 加 entry;`openSettings`(单实例/非模态/原生标题栏/720×520)+ `settings:open` IPC;`menu.ts` 装应用菜单含「设置… ⌘,」并保留 编辑/视图/窗口 角色。
+- [x] **全局设置 store + 主题**:`app-settings.ts`(`userData/settings.json`);`nativeTheme.themeSource` 启动 apply + 切换(Tailwind media 策略,无需切 class);IPC `settings:getTheme/setTheme`;底色同步改单一全局监听。
+- [x] **记忆 IPC 按 wsId 参数化**:四通道加 wsId;`memory:changed` 带 wsId;MemoryList 接 `workspaceId` prop,onChanged 按所选过滤。
+- [x] **设置窗 IA**:左分组 sidebar(应用:模型/通用/关于 · 工作空间[选择器]:记忆/偏好)+ 右详情;`ThemePanel`(浅/深/系统)、`About`(版本,`app:version` IPC);复用 `ApiKeySection`、`MemoryList(wsId)`;偏好占位。
+- [x] **退役旧模态**:删 `SettingsPanel` + store `settingsOpen/setSettingsOpen`;`WorkspaceSwitcher` 设置项改调 `window.pa.settings.open()`。
+
+## 拟人记忆:情景 + 修订 + 受控遗忘(决策见 design-discussion.md「拟人记忆」节)
+
+- [x] **schema 升级 + 迁移**:`MemoryItem` 加 `episode/revisions/status/forgottenReason/updatedAt`;`normalize()` 兼容旧记录(enabled→status)。6 测试。
+- [x] **agent 工具 ×4**:remember(situation 必填,quote 可选)/update_memory/forget_memory/search_memory;`memoryToolNames` 供能力表+风险表。
+- [x] **sourceSessionId 自动填**:`buildAdapter(sessionId)` → `getSourceSessionId` 绑定该会话。
+- [x] **混合召回**:`render()` 注入 `- [id] content`;情景/历史靠 search_memory。
+- [x] **reconsolidation guidelines**:"先巩固再新增"(矛盾/细化→update、过时→forget)。
+- [x] **写入可见+可逆**:记忆工具全 ReadOnly 自动放行(不审批),onChange 刷新列表。
+- [x] **UI(中等档)**:content+kind+situation+遗忘(软删)/恢复;原话/修改历史可展开;底部弱化"已遗忘"折叠区做误忘兜底。不做跳转源会话、行内编辑。
+- [x] **IPC/preload**:`memory:list`(active,含新字段)、`memory:listForgotten`、`memory:remove`(软删)、`memory:restore`;MemoryView 加 revisions 供 UI 展开。
+- 暂不做(已决策):自动衰退/TTL、相关性筛选注入、显式权重。
+
+## 交互改版:Workspace + 三栏布局 + Step 内联(决策见 research/design-discussion.md)
+
+### 阶段 1 · 前端交互骨架(内存态,先验证手感)
+
+- [ ] **四栏外壳**:`App.tsx` 改为 `[SessionList] [ChatPane] [ArtifactPanel?]`,移除旧 50/50 布局。
+- [ ] **SessionList**:`features/session/SessionList.tsx`,当前 workspace 的会话列表,可折叠。
+- [ ] **WorkspaceSwitcher**:`features/session/WorkspaceSwitcher.tsx`,左下角弹出式切换器 + 设置入口。
+- [ ] **红绿灯留白**:`pl-20` 从标题栏移到 session 栏顶。
+- [ ] **step 内联**:Action 状态/工具调用/撤销从右侧面板搬进 `ChatPane` 行内可折叠块(按 stepId 归组到对应 assistant turn)。
+- [ ] **ApprovalBanner**:输入框下方常驻横幅,接 `approval.onRequest`。
+- [ ] **退役 WorkspacePanel**:删除 `features/workspace/WorkspacePanel.tsx`,子组件视复用迁移到 conversation / artifact。
+- [ ] **ArtifactPanel**:`features/artifact/ArtifactPanel.tsx`,默认折叠、一次一个、可从来源块重开。
+- [ ] **批量 diff 自动弹出**:`batch.onRequest` → 自动展开 ArtifactPanel 显示 `BatchPreview`,与审批横幅"查看"联动。
+- [ ] **Workspace mock**:mock 1~2 个 workspace,切换时换 session 列表。
+- [ ] **设置面板**:把 `MemoryList` 从主界面移入 workspace 设置。
+
+### 阶段 2 · 数据层与迁移
+
+- [x] **会话持久化**:`infra` 新增 WorkspaceStore + SessionStore。**transcript JSON 单一事实源**(JSONL 方案作废)—— 既喂 agent 恢复,又由主进程 `transcriptToTimeline` 映射重建 timeline。
+- [x] **完整恢复**:`PiAgentAdapter` 加 `initialMessages` 播种 + `snapshotTranscript()`;主进程按 session 管理 adapter 注册表,切回会话 agent 带记忆接着聊。
+- [x] **记忆 workspace 化**:每 workspace 一份 `MemoryStore`(`<wsId>/memory.json`),记忆 IPC 走当前 workspace。
+- [x] **workspace 实体落地**:`WorkspaceStore` + IPC(list/active/create/switch),渲染层 store 改真实 IPC,移除 mock。
+- [x] **迁移**:`workspaces.ensureDefault()` + 旧 `userData/memory.json` 并入默认 workspace。
+- [x] **全包 typecheck + build** 通过。
+
+#### 阶段 2 收尾
+- [x] **会话删除 UI**:SessionList 每行 hover 出 🗑,调 `session:remove`,删当前会话则清空对话。
+- [x] **transcript 文件清理**:`SessionStore.remove` 同时 `rmSync` transcript `.json`。
+- [x] **workspace 创建/重命名 UI**:切换器弹层加「新建工作空间」「重命名当前」内联输入;补 `workspace:rename` IPC/preload/facade。
+- [x] **sidebar 宽度/折叠持久化**:存 localStorage(`pa.sidebarWidth` / `pa.sidebarCollapsed`)。
+- [x] **BYO key → safeStorage**(原阶段 C):主进程 `key-store.ts` 用 Electron `safeStorage` 加密落盘 `userData/secrets.json`(全局单份,按 provider 索引);resolver 优先取存储 key,dev 仍 `.env`/env 兜底;`SettingsPanel` 加全局 API Key 区(密文输入、显示末 4 位、更换/清除);IPC/preload `secret:*` 通道。
+- [x] **会话归档(非删除)**:`SessionStore` 加 `archived` 标记 + `setArchived`/`listArchived`;`list` 过滤归档;UI 🗑→📦 归档(从列表隐藏,transcript 保留)。`session:archive` 通道。
+- [x] **workspace 删除 + 二次确认**:`WorkspaceStore.remove`(级联清子树、拒删最后一个);切换器内联"删除「X」?确认/取消";删当前自动切到剩余。
+- [x] **updatedAt 单调递增**:`SessionStore.tick()` 修同毫秒排序不确定。
+- [ ] **未配置 key 引导**:暂不做 —— 默认内置 LLM 后端,未来做登录(决策 2026-05-21)。
+- [ ] **已归档会话查看/恢复 UI**:后端 `listArchived` + `setArchived(false)` 就绪,缺入口(如设置里"已归档"列表)。
+- [ ] **BYO key 多 provider**:当前 UI 只管当前 provider 的 key,KeyStore 已按 provider 索引。
+
 ## 领域模型待细化(来自 research/domain-model.md 第 5 节)
 
 - [ ] **Action 聚合归属** —— 是否将 Action 从"跨上下文概念"提升为独立聚合(执行记录/审批/日志各自引用)。
 - [ ] **Plan 修订语义** —— `PlanRevised` 时,已执行 Step/Action 如何处理(保留 vs 失效)。⭐ 影响执行编排正确性
 - [ ] **RiskClassifier 规则来源** —— 静态规则表 vs LLM 辅助分级 vs 两者结合(静态兜底)。⭐ 影响安全正确性
-- [ ] **Memory 写入触发** —— 何时由 MemoryWriter 提议持久化;"受控非静默"的具体 UX。
+- [x] **Memory 写入触发** —— 已定:增/改/忘由 agent 工具(remember/update_memory/forget_memory)触发,自动执行 + 可见(对话内动作 + 列表刷新)+ 可逆(软删),不审批。详见 design-discussion.md「拟人记忆」。
 - [ ] **领域事件分发机制** —— 进程内同步 vs 事件总线(影响 Electron 主进程↔渲染层 IPC 设计)。
 
 ## pi 集成后续(已接 pi-ai → infra,pi-agent-core → ctx-task)
@@ -18,7 +76,7 @@
 - [ ] **BYO key → Keychain**:`envApiKeyResolver` 仅占位,换成 OS Keychain 实现。(阶段 C)
 - [x] **真实对话验证**:DeepSeek 端到端跑通。
 - [x] **desktop 接线**:主进程已实例化 gateway + adapter,领域事件经 IPC 推给渲染层工作区。
-- [ ] **extract_document**:PDF/图片信息提取工具(阶段 B,调研→产出需要)。
+- [x] **extract_document**:新建 `@pa/cap-document`(PDF via pdf-parse + 纯文本类),ReadOnly 自动放行;`Capability` union 加 `document`;`capabilityOf` 改为工具名→能力注册表(为多能力铺路);system-prompt 注入 documentGuidelines。**图片 OCR / docx 留后续。**
 - [x] **破坏性 fs 工具**:delete(软删到回收区)/ move_file(移动/重命名),均可回滚。
 - [x] **执行前 diff 预览整批审批**:plan_file_changes 工具一次性提交全部 move/delete,UI 整批预览+同意/拒绝,批准后原子执行+批量回滚日志。**阶段 A 完成。**
 

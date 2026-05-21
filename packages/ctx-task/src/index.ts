@@ -34,6 +34,7 @@ import {
 
 // Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。
 export type { Gatekeeper, ToolCallIntent, GateDecision } from "@pa/domain-core";
+export type { AgentMessage } from "@earendil-works/pi-agent-core";
 /** 占位守门人:全部放行。真实风险分级在 ctx-trust。 */
 export const allowAllGatekeeper: Gatekeeper = {
   async evaluate() {
@@ -124,6 +125,8 @@ export interface PiAgentAdapterDeps {
   readonly systemPrompt?: string;
   /** 推理强度(默认 off)。开启可显著改善规划/工具使用。 */
   readonly thinkingLevel?: ThinkingLevel;
+  /** 恢复会话:用持久化的 transcript 播种 agent,使其带记忆接着聊。 */
+  readonly initialMessages?: AgentMessage[];
   /** 上下文注入(如 Personal Memory 召回):返回的文本会作为前置消息注入每次 LLM 调用 */
   readonly contextProvider?: () => string | undefined;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
@@ -150,7 +153,8 @@ export class PiAgentAdapter {
         systemPrompt: deps.systemPrompt ?? "",
         model: deps.model,
         tools: deps.tools ?? [],
-        thinkingLevel: deps.thinkingLevel ?? "off"
+        thinkingLevel: deps.thinkingLevel ?? "off",
+        ...(deps.initialMessages ? { messages: deps.initialMessages } : {})
       },
       getApiKey: (provider) => deps.apiKeyResolver(provider),
       beforeToolCall: async (
@@ -210,5 +214,10 @@ export class PiAgentAdapter {
       unsubscribe();
     }
     return taskId;
+  }
+
+  /** 当前 transcript 快照(持久化以便日后恢复会话)。 */
+  snapshotTranscript(): AgentMessage[] {
+    return this.agent.state.messages;
   }
 }

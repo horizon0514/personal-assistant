@@ -2,12 +2,43 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
+export type { MemoryView };
 import type { FileChangeOp } from "@pa/cap-filesystem";
+import type { WorkspaceRecord, SessionRecord } from "@pa/infra";
+
+export type { WorkspaceRecord, SessionRecord };
 
 export interface BatchRequest {
   actionId: string;
   operations: FileChangeOp[];
 }
+
+export type ThemeSource = "light" | "dark" | "system";
+
+export interface ApiKeyStatus {
+  provider: string;
+  set: boolean;
+  last4?: string;
+}
+
+/** memory:changed 负载:带 wsId,消费方按所选 workspace 过滤。 */
+export interface MemoryChange {
+  wsId: string;
+  items: MemoryView[];
+}
+
+/** 重建历史会话用的 timeline 项(由主进程从 transcript 映射,与实时事件形状一致)。 */
+export interface PersistedAction {
+  id: string;
+  stepId: string;
+  tool: string;
+  capability: string;
+  status: "done" | "failed";
+  error?: string;
+}
+export type TimelineItem =
+  | { kind: "msg"; id: string; role: "user" | "assistant"; content: string }
+  | { kind: "step"; stepId: string; index: number; actions: PersistedAction[] };
 
 export type ChatStreamEvent =
   | { type: "delta"; text: string }
@@ -27,8 +58,46 @@ export interface ApprovalRequest {
  */
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke("app:ping"),
+  appVersion: (): Promise<string> => ipcRenderer.invoke("app:version"),
+  settings: {
+    /** 打开独立设置窗(单实例) */
+    open: (): Promise<void> => ipcRenderer.invoke("settings:open"),
+    getTheme: (): Promise<ThemeSource> => ipcRenderer.invoke("settings:getTheme"),
+    setTheme: (theme: ThemeSource): Promise<ThemeSource> => ipcRenderer.invoke("settings:setTheme", theme)
+  },
+  workspace: {
+    list: (): Promise<WorkspaceRecord[]> => ipcRenderer.invoke("workspace:list"),
+    active: (): Promise<string> => ipcRenderer.invoke("workspace:active"),
+    create: (name: string): Promise<WorkspaceRecord> => ipcRenderer.invoke("workspace:create", name),
+    rename: (wsId: string, name: string): Promise<WorkspaceRecord[]> =>
+      ipcRenderer.invoke("workspace:rename", { wsId, name }),
+    /** 删除 workspace(级联),返回剩余列表 + 新的当前 workspace */
+    delete: (wsId: string): Promise<{ workspaces: WorkspaceRecord[]; activeWorkspaceId: string }> =>
+      ipcRenderer.invoke("workspace:delete", wsId),
+    /** 切换 workspace,返回该 workspace 的会话列表 */
+    switch: (wsId: string): Promise<SessionRecord[]> => ipcRenderer.invoke("workspace:switch", wsId)
+  },
+  session: {
+    list: (): Promise<SessionRecord[]> => ipcRenderer.invoke("session:list"),
+    create: (): Promise<SessionRecord> => ipcRenderer.invoke("session:create"),
+    /** 打开会话,返回重建好的 timeline */
+    open: (sessionId: string): Promise<TimelineItem[]> => ipcRenderer.invoke("session:open", sessionId),
+    /** 归档会话(从列表隐藏,不删 transcript) */
+    archive: (sessionId: string): Promise<void> => ipcRenderer.invoke("session:archive", sessionId),
+    /** 会话列表变化(如自动命名/落盘后) */
+    onChanged: (cb: (sessions: SessionRecord[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: SessionRecord[]): void => cb(payload);
+      ipcRenderer.on("session:changed", listener);
+      return () => ipcRenderer.removeListener("session:changed", listener);
+    }
+  },
+  secret: {
+    apiKeyStatus: (): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:apiKeyStatus"),
+    setApiKey: (key: string): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:setApiKey", key),
+    clearApiKey: (): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:clearApiKey")
+  },
   chat: {
-    send: (text: string): void => ipcRenderer.send("chat:send", text),
+    send: (sessionId: string, text: string): void => ipcRenderer.send("chat:send", { sessionId, text }),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
     /** 订阅流式事件,返回取消订阅函数 */
     onStream: (cb: (event: ChatStreamEvent) => void): (() => void) => {
@@ -77,10 +146,14 @@ const api = {
     }
   },
   memory: {
-    list: (): Promise<MemoryView[]> => ipcRenderer.invoke("memory:list"),
-    remove: (id: string): void => ipcRenderer.send("memory:remove", id),
-    onChanged: (cb: (items: MemoryView[]) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, payload: MemoryView[]): void => cb(payload);
+    list: (wsId: string): Promise<MemoryView[]> => ipcRenderer.invoke("memory:list", wsId),
+    listForgotten: (wsId: string): Promise<MemoryView[]> => ipcRenderer.invoke("memory:listForgotten", wsId),
+    /** 软删(遗忘),可恢复 */
+    remove: (wsId: string, id: string): void => ipcRenderer.send("memory:remove", { wsId, id }),
+    restore: (wsId: string, id: string): void => ipcRenderer.send("memory:restore", { wsId, id }),
+    /** 记忆变化(含 agent 后台写入);payload 带 wsId,消费方按所选 workspace 过滤 */
+    onChanged: (cb: (payload: MemoryChange) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: MemoryChange): void => cb(payload);
       ipcRenderer.on("memory:changed", listener);
       return () => ipcRenderer.removeListener("memory:changed", listener);
     }

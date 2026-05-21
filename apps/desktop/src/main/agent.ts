@@ -1,14 +1,26 @@
 /**
- * 组合根(composition root):把各限界上下文的实现装配成一个可用的 agent,
- * 并对外暴露一个面向 IPC 的 facade。IPC 注册见 ./ipc.ts。
+ * 组合根(composition root):把各限界上下文装配成 agent,并对外暴露 IPC facade。
+ *
+ * 阶段 2:workspace → session → step 落地为真实持久化。
+ * - WorkspaceStore:workspace 列表 + 每 workspace 子树。
+ * - 每 workspace 一份记忆(MemoryStore);每 workspace 一个 SessionStore。
+ * - 每 session 一个 PiAgentAdapter(用持久化 transcript 播种,带记忆接着聊)。
  */
 import { app, BrowserWindow, type WebContents } from "electron";
+import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { PiAgentAdapter } from "@pa/ctx-task";
-import { MemoryStore, createMemoryTools, memoryGuidelines } from "@pa/ctx-memory";
+import { PiAgentAdapter, type AgentMessage } from "@pa/ctx-task";
+import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
-import { createModel, envApiKeyResolver } from "@pa/infra";
+import {
+  createModel,
+  envApiKeyResolver,
+  WorkspaceStore,
+  SessionStore,
+  type WorkspaceRecord,
+  type SessionRecord
+} from "@pa/infra";
 import {
   createPlanFileChangesTool,
   filesystemGuidelines,
@@ -18,55 +30,90 @@ import {
   filesystemToolRisk,
   type FileChangeOp
 } from "@pa/cap-filesystem";
+import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
 import { newConversationId, type Capability, type DomainEvent, type RiskLevel } from "@pa/domain-core";
 import { buildSystemPrompt } from "./system-prompt";
+import { transcriptToTimeline } from "./transcript-to-timeline";
+import { keyStore } from "./key-store";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "anthropic";
 const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "claude-sonnet-4-6";
 const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
 
-/** 一个 chat 窗口 = 一个会话(多轮共享 transcript)*/
-const conversationId = newConversationId();
-
 type ChatStreamEvent = { type: "delta"; text: string } | { type: "done" } | { type: "error"; message: string };
 
-let adapter: PiAgentAdapter | undefined;
-let activeSender: WebContents | undefined;
+// 工具名 → Capability 注册表(各 capability 自报工具名;新增能力在此登记一行)。
+const capabilityByTool = new Map<string, Capability>();
+for (const t of memoryToolNames) capabilityByTool.set(t, "memory");
+for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
+for (const t of documentToolNames) capabilityByTool.set(t, "document");
+const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
 
-const journal = new OperationJournal();
-journal.registerReverser("filesystem", filesystemReverser);
+// ── 持久化根 ─────────────────────────────────────────────────
+const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
+let activeWorkspaceId = workspaces.ensureDefault();
+let activeSessionId = "";
 
-let memory: MemoryStore | undefined;
-function getMemory(): MemoryStore {
-  if (!memory) memory = new MemoryStore(join(app.getPath("userData"), "memory.json"));
-  return memory;
-}
+migrateLegacyMemory();
 
-const memoryToolNames = new Set(["remember"]);
-
-function broadcastMemory(): void {
-  const view = getMemory().list();
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.webContents.isDestroyed()) win.webContents.send("memory:changed", view);
+/** 旧版全局 memory.json → 并入默认 workspace(只做一次)。 */
+function migrateLegacyMemory(): void {
+  const legacy = join(app.getPath("userData"), "memory.json");
+  const target = workspaces.memoryPath(activeWorkspaceId);
+  if (existsSync(legacy) && !existsSync(target)) {
+    try {
+      copyFileSync(legacy, target);
+    } catch {
+      /* 迁移失败不致命:大不了从空记忆开始 */
+    }
   }
 }
 
+// ── 每 workspace 的记忆 / 会话索引(惰性)────────────────────
+const memoryStores = new Map<string, MemoryStore>();
+function getMemory(wsId: string): MemoryStore {
+  let s = memoryStores.get(wsId);
+  if (!s) {
+    s = new MemoryStore(workspaces.memoryPath(wsId));
+    memoryStores.set(wsId, s);
+  }
+  return s;
+}
+
+const sessionStores = new Map<string, SessionStore>();
+function getSessions(wsId: string): SessionStore {
+  let s = sessionStores.get(wsId);
+  if (!s) {
+    s = new SessionStore(workspaces.dir(wsId));
+    sessionStores.set(wsId, s);
+  }
+  return s;
+}
+
+// ── Reversibility(全局 journal)────────────────────────────
+const journal = new OperationJournal();
+journal.registerReverser("filesystem", filesystemReverser);
+
+// ── 审批 / 批量 桥 ──────────────────────────────────────────
+let activeSender: WebContents | undefined;
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
 const pendingBatches = new Map<string, (approved: boolean) => void>();
 
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
 }
-
-/** 广播 journal 变化到所有窗口(记账/撤销都会触发)*/
-function broadcastJournal(): void {
-  const view = journal.list();
+function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.webContents.isDestroyed()) win.webContents.send("reversibility:changed", view);
+    if (!win.webContents.isDestroyed()) win.webContents.send(channel, payload);
   }
 }
+function broadcastMemory(wsId: string): void {
+  broadcast("memory:changed", { wsId, items: getMemory(wsId).list() });
+}
+function broadcastJournal(): void {
+  broadcast("reversibility:changed", journal.list());
+}
 
-/** UI 审批桥:发起单工具审批 */
 function requestApproval(ask: ApprovalAsk): Promise<boolean> {
   return new Promise((resolve) => {
     pendingApprovals.set(ask.actionId, resolve);
@@ -79,8 +126,6 @@ function requestApproval(ask: ApprovalAsk): Promise<boolean> {
     });
   });
 }
-
-/** 批量审批桥:把改动列表交给 UI 做 diff 预览 */
 function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[] }): Promise<boolean> {
   return new Promise((resolve) => {
     pendingBatches.set(req.actionId, resolve);
@@ -88,67 +133,142 @@ function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[
   });
 }
 
-function getAdapter(): PiAgentAdapter {
-  if (!adapter) {
-    const tools = [
-      ...filesystemTools,
-      createPlanFileChangesTool(requestBatchApproval),
-      ...createMemoryTools(getMemory(), broadcastMemory)
-    ];
-    adapter = new PiAgentAdapter({
-      model: createModel({ provider: PROVIDER, modelId: MODEL }),
-      apiKeyResolver: async (provider) => API_KEY ?? (await envApiKeyResolver(provider)),
-      // 动态拼接:基础行为 + 环境 + 真实工具列表 + 各能力自带的使用指南
-      systemPrompt: buildSystemPrompt({
-        tools: tools.map((t) => ({ name: t.name, description: t.description })),
-        guidelines: [filesystemGuidelines, memoryGuidelines]
-      }),
-      thinkingLevel: "high", // 开启推理:显著改善规划与工具使用
-      tools,
-      // 召回:每次 LLM 调用注入个人记忆
-      contextProvider: () => getMemory().render(),
-      gatekeeper: createGatekeeper({
-        // plan_file_changes/remember 自带可见性,gatekeeper 放行;其余按能力风险分级
-        riskOf: (call): RiskLevel =>
-          call.tool === "plan_file_changes" || call.tool === "remember"
-            ? "ReadOnly"
-            : riskClassifierFromMap({ ...filesystemToolRisk })(call),
-        requestApproval
-      }),
-      capabilityOf: (tool): Capability => (memoryToolNames.has(tool) ? "memory" : "filesystem"),
-      onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
-      onEvent: (event: DomainEvent) => sendTo("domain:event", event),
-      afterTool: ({ actionId, capability, tool, details, isError }) => {
-        if (isError) return;
-        const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)?.reversal;
-        if (!reversal) return; // 只读工具无 reversal
-        const summary =
-          (details as { path?: string; to?: string } | undefined)?.path ??
-          (details as { to?: string } | undefined)?.to ??
-          tool;
-        journal.record({ actionId, capability, tool, summary, reversal });
-        broadcastJournal();
-      }
-    });
-  }
-  return adapter;
+// ── 每 session 一个 adapter(用 transcript 播种)─────────────
+const adapters = new Map<string, PiAgentAdapter>();
+
+function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMessage[]): PiAgentAdapter {
+  const memory = getMemory(wsId);
+  const tools = [
+    ...filesystemTools,
+    ...documentTools,
+    createPlanFileChangesTool(requestBatchApproval),
+    // 新记忆的情景里记下它从哪个会话学来的
+    ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
+  ];
+  return new PiAgentAdapter({
+    model: createModel({ provider: PROVIDER, modelId: MODEL }),
+    // 优先用户在设置里存的 key(safeStorage),其次构建期 .env(dev 兜底),最后环境变量
+    apiKeyResolver: async (provider) => keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider)),
+    systemPrompt: buildSystemPrompt({
+      tools: tools.map((t) => ({ name: t.name, description: t.description })),
+      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines]
+    }),
+    thinkingLevel: "high",
+    tools,
+    initialMessages,
+    contextProvider: () => memory.render(),
+    gatekeeper: createGatekeeper({
+      riskOf: (call): RiskLevel =>
+        // plan_file_changes 内部自做批量审批;记忆工具按决策自动执行+可见+可逆(不审批)
+        call.tool === "plan_file_changes" || memoryToolNames.has(call.tool)
+          ? "ReadOnly"
+          : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk })(call),
+      requestApproval
+    }),
+    capabilityOf,
+    onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
+    onEvent: (event: DomainEvent) => sendTo("domain:event", event),
+    afterTool: ({ actionId, capability, tool, details, isError }) => {
+      if (isError) return;
+      const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)?.reversal;
+      if (!reversal) return;
+      const summary =
+        (details as { path?: string; to?: string } | undefined)?.path ??
+        (details as { to?: string } | undefined)?.to ??
+        tool;
+      journal.record({ actionId, capability, tool, summary, reversal });
+      broadcastJournal();
+    }
+  });
 }
 
-/** 面向 IPC 的 facade */
+function getAdapter(sessionId: string): PiAgentAdapter {
+  let a = adapters.get(sessionId);
+  if (!a) {
+    const seed = getSessions(activeWorkspaceId).loadTranscript(sessionId) as AgentMessage[] | undefined;
+    a = buildAdapter(activeWorkspaceId, sessionId, seed);
+    adapters.set(sessionId, a);
+  }
+  return a;
+}
+
+// ── facade ──────────────────────────────────────────────────
 export const agent = {
   modelLabel: (): string => `${PROVIDER} · ${MODEL}`,
 
-  async send(sender: WebContents, text: string): Promise<void> {
+  // BYO key(全局单份,按当前 provider 存)
+  apiKeyStatus: (): { provider: string; set: boolean; last4?: string } => ({
+    provider: PROVIDER,
+    ...keyStore.status(PROVIDER)
+  }),
+  setApiKey: (key: string): void => keyStore.set(PROVIDER, key.trim()),
+  clearApiKey: (): void => keyStore.clear(PROVIDER),
+
+  // Workspace
+  listWorkspaces: (): WorkspaceRecord[] => workspaces.list(),
+  activeWorkspace: (): string => activeWorkspaceId,
+  createWorkspace: (name: string): WorkspaceRecord => workspaces.create(name),
+  renameWorkspace: (wsId: string, name: string): WorkspaceRecord[] => {
+    workspaces.rename(wsId, name);
+    return workspaces.list();
+  },
+  /** 删除 workspace(级联清子树)。若删的是当前,切到剩余第一个。 */
+  deleteWorkspace(wsId: string): { workspaces: WorkspaceRecord[]; activeWorkspaceId: string } {
+    workspaces.remove(wsId);
+    memoryStores.delete(wsId);
+    sessionStores.delete(wsId);
+    adapters.clear(); // 简单起见全清,下次按需从磁盘 transcript 重建
+    const list = workspaces.list();
+    if (!list.some((w) => w.id === activeWorkspaceId)) {
+      activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
+      activeSessionId = "";
+    }
+    return { workspaces: list, activeWorkspaceId };
+  },
+  switchWorkspace(wsId: string): void {
+    activeWorkspaceId = wsId;
+    activeSessionId = "";
+    broadcastMemory(wsId);
+  },
+
+  // Session
+  listSessions: (): SessionRecord[] => getSessions(activeWorkspaceId).list(),
+  createSession(): SessionRecord {
+    const rec = getSessions(activeWorkspaceId).create();
+    activeSessionId = rec.id;
+    return rec;
+  },
+  /** 打开会话:确保 adapter 已用 transcript 播种,返回重建好的 timeline。 */
+  openSession(sessionId: string): unknown[] {
+    activeSessionId = sessionId;
+    getAdapter(sessionId); // 触发播种
+    const transcript = getSessions(activeWorkspaceId).loadTranscript(sessionId);
+    return transcriptToTimeline(transcript, capabilityOf);
+  },
+  /** 归档会话(可逆,保留 transcript):从列表隐藏。 */
+  archiveSession(sessionId: string): void {
+    getSessions(activeWorkspaceId).setArchived(sessionId, true);
+    if (activeSessionId === sessionId) activeSessionId = "";
+  },
+
+  async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
     activeSender = sender;
+    activeSessionId = sessionId;
+    const sessions = getSessions(activeWorkspaceId);
+
     let instance: PiAgentAdapter;
     try {
-      instance = getAdapter();
+      instance = getAdapter(sessionId);
     } catch (err) {
       sendTo("chat:stream", { type: "error", message: `模型初始化失败:${String(err)}` } satisfies ChatStreamEvent);
       return;
     }
     try {
-      await instance.startTask({ text, conversationId });
+      await instance.startTask({ text, conversationId: newConversationId() });
+      // 落盘:transcript 快照 + 首条用户消息自动命名
+      sessions.saveTranscript(sessionId, instance.snapshotTranscript());
+      autoTitle(sessions, sessionId, text);
+      broadcast("session:changed", sessions.list());
       sendTo("chat:stream", { type: "done" } satisfies ChatStreamEvent);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -163,7 +283,6 @@ export const agent = {
       resolve(approved);
     }
   },
-
   resolveBatch(actionId: string, approved: boolean): void {
     const resolve = pendingBatches.get(actionId);
     if (resolve) {
@@ -172,18 +291,31 @@ export const agent = {
     }
   },
 
-  listMemory: () => getMemory().list(),
-
-  removeMemory(id: string): void {
-    getMemory().remove(id);
-    broadcastMemory();
+  // Memory(按 wsId 参数化,设置窗自选 workspace,不漂移)
+  listMemory: (wsId: string) => getMemory(wsId).list(),
+  listForgottenMemory: (wsId: string) => getMemory(wsId).listForgotten(),
+  removeMemory(wsId: string, id: string): void {
+    getMemory(wsId).remove(id); // 软删(遗忘)
+    broadcastMemory(wsId);
+  },
+  restoreMemory(wsId: string, id: string): void {
+    getMemory(wsId).restore(id);
+    broadcastMemory(wsId);
   },
 
   listJournal: () => journal.list(),
-
   async undoLast(): Promise<{ actionId: string; tool: string; summary: string } | null> {
     const entry = await journal.undoLast();
     broadcastJournal();
     return entry ? { actionId: entry.actionId, tool: entry.tool, summary: entry.summary } : null;
   }
 };
+
+/** 会话仍叫「新会话」时,用首条用户消息生成标题。 */
+function autoTitle(sessions: SessionStore, sessionId: string, firstText: string): void {
+  const rec = sessions.list().find((s) => s.id === sessionId);
+  if (rec && rec.title === "新会话") {
+    const title = firstText.trim().replace(/\s+/g, " ").slice(0, 24);
+    if (title) sessions.rename(sessionId, title);
+  }
+}

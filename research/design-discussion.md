@@ -92,6 +92,178 @@
 
 ---
 
+## 交互改版:Workspace + 三栏布局 + Step 内联(2026-05-21 追加)
+
+> 第二轮 grill 访谈。起因:原布局「左对话 / 右 step 列表」存在三个问题 —— 缺 workspace 概念、布局未分层、step 与对话叙事重复。
+
+### 数据模型层级
+
+- 确立层级 **`workspace → session → step`**。
+- **workspace = 逻辑命名空间**(记忆 + 偏好 + 会话 + 信任策略),**不强绑文件目录**。本产品操作范围是整台机器,强绑单目录反而限制能力;文件根目录最多作为新任务的**可选默认起始目录**。
+- **命名冲突已解决**:原 `features/workspace`(步骤/动作可视化面板)让出 "workspace" 一词 —— 该面板概念**并入对话**,不再独立存在。
+
+### 布局(四栏,右栏按需)
+
+```
+┌──────────┬──────────────────┬─────────────┐
+│ session  │                  │             │
+│ 列表      │   对话(占满)      │  artifact   │
+│(当前ws)   │                  │ (默认折叠)   │
+│          │  ┌────────────┐  │  批量diff   │
+│          │  │  输入框     │  │  自动弹出    │
+│ ┌──────┐ │  ├────────────┤  │  其余手动    │
+│ │设置+ │ │  │审批常驻横幅 │  │  一次一个    │
+│ │ws切换│ │  └────────────┘  │  无tab历史   │
+│ └──────┘ │                  │             │
+└──────────┴──────────────────┴─────────────┘
+```
+
+- **session 列表**:可折叠,只显当前 workspace 的会话(切 ws 换一批)。
+- **左下角**:弹出式 workspace 切换器 + 设置入口(不另起 Slack 式图标竖栏,避免第五栏)。
+- **记忆 + 偏好**:收进 workspace 设置,平时不占主界面(呼应 workspace = 命名空间)。
+- macOS 红绿灯位移到 session 栏顶,`pl-20` 留白需重新分配(实现细节)。
+
+### 对话 / step / 审批
+
+- **step 并入对话流**:工具调用、状态(running/awaiting/done/failed)、撤销 → 行内可折叠块。不再有独立 step 列表。消除「对话 + step」两套叙事的重复。
+- **审批 → 输入框下方常驻横幅**:决策点离用户操作最近,且不会随对话滚走错过。
+- **批量 diff**:审批横幅出现的同时,右侧 artifact **自动弹出**铺开 diff(不看就批准太危险);其余 artifact 手动点开。
+
+### artifact 面板
+
+- 默认折叠,对话占满整宽(居中可读栏 ≈720px),不留空面板。
+- 一次一个,从对话内来源块可重新点开,**无常驻 tab 历史**(过早的复杂度)。
+- 内容:批量 diff、文件内容、文档产出、调研结果、登录态浏览器画面等。
+
+### 持久化与迁移(隐含硬前提,现状不存在)
+
+- **会话未持久化**:现 `ChatPane` 消息仅在组件 state,刷新即没。session 列表要求会话能存/列/切。
+- **恢复语义 = 完整恢复**:切回旧会话时 agent **带记忆接着聊**,不只是只读回放。pi 的 `Agent` 原生支持(`initialState.messages` 播种 + `state.messages` 快照)。代价:主进程按 session 管理多个 agent 实例(session 注册表),不再是单一全局 adapter。
+- **存储 = transcript JSON 单一事实源**(修正:原 JSONL 方案作废)。既然能拿到完整 `AgentMessage[]`,它**同时**喂 agent 恢复 + 由渲染层映射重建 timeline(assistant 文本→气泡、一个 turn 内工具调用→step 块),无需再单独维护一份 JSONL UI 轨迹(否则双份事实源)。
+  - 方案:`packages/infra` 新增 WorkspaceStore + SessionStore。transcript 对 infra 是不透明 JSON(类型 `AgentMessage` 属 pi,不外泄到 infra)。
+- **`ctx-memory` 加 workspace 作用域**(按 workspace 分目录存 `memory.json`),老数据迁移。
+- 升级建**默认 workspace** 兜底,把现有全局 `memory.json` 并入。
+
+落地目录:
+```
+<userData>/workspaces/
+  index.json                 # workspace 列表 + 元数据
+  <wsId>/
+    memory.json              # 该 ws 的记忆
+    sessions/
+      index.json             # 会话索引(标题/时间/排序)
+      <sessionId>.json       # 该会话 transcript(AgentMessage[])
+```
+
+### 实施顺序
+
+1. **先搭前端骨架**验证交互:会话存内存、workspace mock 1~2 个,跑通布局 / 内联 step / 审批横幅 / artifact 弹出的手感。
+2. **再补数据层**:会话持久化 → 记忆 workspace 化 → 迁移。先 UI 后数据,避免一上来动数据层卡住手感验证。
+
+---
+
+## 拟人记忆:情景 + 修订 + 受控遗忘(2026-05-21 追加)
+
+> 第三轮 grill。起因:现 `ctx-memory` 太简单 —— agent 只能 add 不能 delete/update,且记忆是一句蒸馏 content,丢了"何时/何地/为何记"的原始情景。目标:按人类记忆(情景 episodic + 语义 semantic + 巩固 reconsolidation)重塑。正好补回领域模型 3.5 早已定义、却被实现砍掉的 `source` / `MemoryEdited` / `MemoryDeleted` / `MemoryRecaller`。
+
+### 记录结构
+
+```
+MemoryItem {
+  id, kind: preference|fact
+  content                    // 蒸馏的事实/偏好(语义层)
+  episode {                  // 情景层(选「中等」档)
+    situation                // agent 写的"当时在做什么"
+    quote?                   // 触发的原话
+    sourceSessionId?         // 链接源会话(主进程自动填;UI 暂不消费)
+  }
+  revisions[] { prevContent, reason, at }   // 修改历史
+  status: active|forgotten   // 软遗忘(复活原 enabled 字段)
+  createdAt, updatedAt
+}
+```
+
+- **情景档位 = 中等**:situation + quote + sourceSessionId。不做 `where` 等结构化环境字段(本地助理"地点"≈某目录/任务,situation 一句已涵盖,过早结构化是负担)。
+- **修改历史 = 完整 append-only「存」+ 精简「用」**:存全程 revisions(JSON 便宜、符合"可检视"不变量);注入 prompt / UI 默认只露 当前值 + 最近一次"从 X 改成 Y 因为 Z"。
+
+### 遗忘(分两步)
+
+- **现在做受控软遗忘**:`forget_memory(id, reason)` + UI 删除,**都软删**(status=forgotten、记原因、可恢复、有"已遗忘"区)。理由:解决"只能加不能删";软删保痕迹符合可检视;像人类——忘≠擦除。
+- **自动衰退 / TTL 推迟**:对工具而言"悄悄忘了你的归档目录"是灾难且极难调;等真有记忆爆炸、摸清使用模式再说。
+
+### 召回(混合)
+
+- 平时**只自动注入精简语义层**(每条 content 一行,**带短 id** 供 agent 引用),保证基线意识。
+- 情景 / 修改历史 / 原话 **不进 prompt**,经 `search_memory(query)` 懒加载。
+- 相关性筛选注入**先不做**(N 小全量精简 content 即可);需要时用**隐式显著性**(kind / recency / revision 次数)而非显式权重。
+
+### agent 工具面(4)
+
+- `remember(kind, content, situation, quote?)` — 新增(sourceSessionId 主进程自动填)
+- `update_memory(id, newContent, reason)` — 修订(追加 revision)
+- `forget_memory(id, reason)` — 软遗忘
+- `search_memory(query)` — 拉全貌
+- **guidelines 强约束**:新信息与某条已有记忆矛盾/细化 → `update_memory` 改它(reconsolidation),只有全新事实才 `remember`;过时才 `forget`。避免堆矛盾条目。
+
+### 写入控制 & 权重
+
+- 增/改/忘 **自动执行 + 可见 + 可逆**(对话内显示为动作 + 记忆列表实时更新),不弹审批。可见性+可逆性即安全网。
+- **权重不做**:其消费者(相关性召回、衰退)均已推迟,加了就是没人读的字段;且无 decay 配套等于半套机制。
+
+### UI(中等档)
+
+- 每条:content + kind + situation + 遗忘/恢复 + "已遗忘"区。
+- **可展开**看完整情景(quote)+ 修改历史。兑现"可检视"不变量。
+- **不做**:跳转源会话(跨界面导航,先存 sourceSessionId 不消费)、用户行内编辑(涉及"手改算不算 revision",后补)。
+
+### 迁移
+
+旧 `MemoryItem`(无 episode/revisions/status)→ 加载时补:空 episode、status=active、revisions=[]。
+
+---
+
+## 设置界面重做:独立窗口 + 全局/workspace 二分(2026-05-21 追加)
+
+> 第四轮 grill。起因:设置现为主窗口内嵌模态,想更 native(独立 BrowserWindow);信息架构要区分「全局/应用设置」与「workspace 设置(记忆/偏好)」。
+
+### 架构
+
+- **独立 BrowserWindow + 独立 HTML 入口**(`settings.html` + `settings.tsx`,单独 React root)。共享 preload(`window.pa`),所有 IPC 通用。不与主应用 bundle 耦合。
+- 设置窗是独立 React root,**无 ShellProvider**;靠 `window.pa.workspace.active()/list()` 直接拿状态。
+
+### 信息架构(macOS 原生:左分组 sidebar + 右详情)
+
+```
+应用
+  模型 / API Key      (全局)
+  通用 (主题)         (全局)
+  关于 (版本)         (全局)
+─────────────
+工作空间 [个人 ▾]      ← 组头带 workspace 选择器
+  记忆                (按 wsId)
+  偏好 (占位)         (按 wsId)
+```
+
+- **workspace 设置自选 workspace、不跟随主窗口**(跟随易漂移)。→ 记忆 IPC **按 wsId 参数化**。
+
+### 主题(通用面板的真实内容)
+
+- 三选项 **浅色 / 深色 / 跟随系统**(默认跟随)。经 **`nativeTheme.themeSource`** 驱动(自动作用于所有窗口的 `prefers-color-scheme` + 窗口底色,契合现有 CSS 媒体查询)。
+- 存**全局** `userData/settings.json`(复用 infra readJson/writeJson);启动时读出应用。
+
+### 窗口行为
+
+单实例(已开则聚焦) · 非模态(不锁主窗) · `⌘,` 打开 · **普通原生标题栏**(不无边框,像系统设置) · 固定 720×520 · 关闭仅关窗。
+
+### 接线 & 退役
+
+- 打开:切换器"设置"项 + `⌘,` → `window.pa.settings.open()` IPC → 主进程建/聚焦设置窗。
+- **退役**:主窗口内嵌 `SettingsPanel` 模态 + store `settingsOpen/setSettingsOpen`。
+- **复用**:`ApiKeySection`、`MemoryList` 仅依赖 `window.pa`,搬进设置窗;`MemoryList` 改为接受 wsId。
+- 记忆 IPC `list/listForgotten/remove/restore` 全部加 wsId 入参;`memory:changed` 广播带 wsId,设置窗仅在 `wsId===所选` 时重拉(agent 后台写入也实时反映)。
+
+---
+
 ## 决策树速查(决定 → 选择)
 
 | 决策点 | 选择 |
@@ -106,7 +278,30 @@
 | 安全模型 | 建议-审批 + 分级权限(beforeToolCall hook) |
 | 文件回滚 | 预览整批审批 + 可逆 journal + 软删除 |
 | 记忆 | 轻量本地、可见可编辑 |
+| 记忆模型 | 拟人:情景(situation+quote+源会话)+语义+修订历史 |
+| 记忆情景档 | 中等(situation+quote+sourceSessionId,不做结构化 where) |
+| 记忆修订 | 完整 append-only 存 + 精简「当前值+最近变更」用 |
+| 记忆遗忘 | 受控软遗忘(可恢复)现在做;自动衰退/TTL 推迟 |
+| 记忆召回 | 混合:自动注入精简 content(带 id)+ search_memory 懒加载 |
+| 记忆工具 | remember/update_memory/forget_memory/search_memory |
+| 记忆写入 | 自动执行+可见+可逆,不审批 |
+| 记忆权重 | 不做(留给相关性召回期,优先隐式显著性) |
+| 设置形态 | 独立 BrowserWindow + 独立 HTML 入口(settings.html) |
+| 设置 IA | 左分组 sidebar:应用(模型/通用/关于)+ 工作空间[选择器](记忆/偏好) |
+| 设置·workspace | 自选 wsId,记忆 IPC 按 wsId 参数化(不跟随主窗) |
+| 主题 | 浅/深/跟随系统(默认跟随),nativeTheme.themeSource,全局 settings.json |
+| 设置窗行为 | 单实例/非模态/⌘,/原生标题栏/固定 720×520 |
 | 联网 | 无头浏览器(登录态);公开调研搜索 API 待定 |
 | 浏览器 profile | App 内置专用 profile(本地持久登录) |
 | 交互形态 | Chat + 结构化计划 / 工作区面板 |
 | 目标用户 | 知识工作者 / 白领(非开发者) |
+| 数据层级 | workspace → session → step |
+| workspace 定义 | 逻辑命名空间(记忆+偏好+会话+信任),不绑目录 |
+| 布局 | 四栏:session列表 / 对话 / artifact(按需);左下角 ws 切换+设置 |
+| step 呈现 | 并入对话流(行内可折叠块),取消独立列表 |
+| 审批位置 | 输入框下方常驻横幅 |
+| artifact | 默认折叠,一次一个,批量 diff 自动弹出 |
+| 记忆/偏好 | 收进 workspace 设置 |
+| 会话恢复 | 完整恢复(agent 带记忆接着聊,pi 原生支持) |
+| 会话持久化 | infra WorkspaceStore+SessionStore;transcript JSON 单一事实源(JSONL 方案作废) |
+| 实施顺序 | 先前端骨架(内存态)→ 后补持久化与迁移 |

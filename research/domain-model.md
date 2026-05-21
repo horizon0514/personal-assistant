@@ -136,13 +136,15 @@ DDD 的首要动作是**区分核心域 / 支撑域 / 通用域**:把自研精�
 - **关系**:与 FileSystem Capability 是 Customer/Supplier(能力供给变更数据,本上下文记录并能回滚)
 
 ### 3.5 Personal Memory(个人记忆上下文)— 核心
-**职责**:持久化偏好/事实,可见可编辑,纯本地。
-- **聚合根 `MemoryStore`**:`MemoryItem[]`
-  - 实体 `MemoryItem`:`id`、`kind`(Preference / Fact)、`content`、`source`(如何习得)、`createdAt`、`enabled`
-- **值对象**:`MemoryKind`、`MemoryScope`(global / per-capability)
-- **领域服务**:`MemoryWriter`(决定何时持久化,**受控非静默**)、`MemoryRecaller`(把相关记忆注入上下文)
-- **领域事件**:`MemoryRecorded`、`MemoryEdited`、`MemoryDeleted`、`MemoryRecalled`
-- **不变量**:记忆写入必须可被用户检视(不存在黑箱静默写入);仅本地存储
+**职责**:持久化偏好/事实,可见可编辑,纯本地。**拟人模型:情景(episodic)+ 语义(semantic)+ 巩固(reconsolidation)。** 详细决策见 design-discussion.md「拟人记忆」节。
+- **聚合根 `MemoryStore`**:`MemoryItem[]`(按 workspace 隔离)
+  - 实体 `MemoryItem`:`id`、`kind`(Preference / Fact)、`content`(语义层)、`episode`(情景:`situation` 如何习得 + `quote?` 原话 + `sourceSessionId?` 源会话链接)、`revisions[]`(`{prevContent, reason, at}` 修改历史)、`status`(active / forgotten 软遗忘)、`createdAt`、`updatedAt`
+- **值对象**:`MemoryKind`、`Episode`、`Revision`、`MemoryScope`(workspace 级)
+- **领域服务**:`MemoryWriter`(增/改/忘,**自动执行 + 可见 + 可逆**,非黑箱静默)、`MemoryRecaller`(**混合召回**:自动注入精简 content + `search_memory` 懒加载情景/历史)
+- **领域事件**:`MemoryRecorded`、`MemoryEdited`、`MemoryDeleted`(软遗忘)、`MemoryRecalled`
+- **agent 工具**:`remember`、`update_memory`、`forget_memory`、`search_memory`
+- **不变量**:记忆写入/修改/遗忘必须可被用户检视且可逆(不存在黑箱静默写入,不真删);仅本地存储
+- **暂不做**:自动衰退/TTL、相关性筛选注入、显式权重(均推迟,见 design-discussion.md)
 - **关系**:被 Task Orchestration / Conversation 读取(规划时注入偏好);经受控 `MemoryWriter` 写入。"Preference"作为发布语言共享
 
 ### 3.6 Capability 上下文(支撑域)— 三个独立上下文

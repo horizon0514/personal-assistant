@@ -15,7 +15,8 @@ export default defineConfig({
           "@pa/ctx-trust",
           "@pa/ctx-reversibility",
           "@pa/ctx-memory",
-          "@pa/cap-filesystem"
+          "@pa/cap-filesystem",
+          "@pa/cap-document"
         ]
       })
     ],
@@ -37,7 +38,10 @@ export default defineConfig({
     root: resolve(__dirname, "src/renderer"),
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, "src/renderer/index.html") }
+        input: {
+          index: resolve(__dirname, "src/renderer/index.html"),
+          settings: resolve(__dirname, "src/renderer/settings.html")
+        }
       }
     },
     resolve: {
