@@ -13,7 +13,8 @@ interface ActionRow {
   id: string;
   tool: string;
   capability: string;
-  status: "running" | "done" | "failed";
+  status: "running" | "awaiting" | "done" | "failed";
+  riskLevel?: string;
   error?: string;
 }
 
@@ -47,6 +48,40 @@ export function App(): JSX.Element {
     });
     return off;
   }, []);
+
+  // 订阅审批请求 → 把对应卡片切到"待审批"
+  useEffect(() => {
+    const off = window.pa.approval.onRequest((req) => {
+      setActions((prev) => {
+        const exists = prev.some((a) => a.id === req.actionId);
+        const patched = prev.map((a) =>
+          a.id === req.actionId ? { ...a, status: "awaiting" as const, riskLevel: req.riskLevel } : a
+        );
+        return exists
+          ? patched
+          : [
+              ...patched,
+              {
+                id: req.actionId,
+                tool: req.tool,
+                capability: req.capability,
+                status: "awaiting" as const,
+                riskLevel: req.riskLevel
+              }
+            ];
+      });
+    });
+    return off;
+  }, []);
+
+  const respond = (id: string, approved: boolean): void => {
+    window.pa.approval.resolve(id, approved);
+    setActions((prev) =>
+      prev.map((a) =>
+        a.id === id ? { ...a, status: approved ? "running" : "failed", error: approved ? undefined : "已拒绝" } : a
+      )
+    );
+  };
 
   useEffect(() => {
     const off = window.pa.chat.onStream((event) => {
@@ -186,7 +221,28 @@ export function App(): JSX.Element {
                       <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
                         {a.capability}
                       </span>
+                      {a.riskLevel && a.status === "awaiting" && (
+                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                          {a.riskLevel}
+                        </span>
+                      )}
                     </div>
+                    {a.status === "awaiting" && (
+                      <div className="mt-2 flex gap-2">
+                        <button
+                          className="rounded-lg bg-emerald-500 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-emerald-600"
+                          onClick={() => respond(a.id, true)}
+                        >
+                          同意
+                        </button>
+                        <button
+                          className="rounded-lg bg-slate-100 px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                          onClick={() => respond(a.id, false)}
+                        >
+                          拒绝
+                        </button>
+                      </div>
+                    )}
                     {a.error && <p className="mt-1 break-words text-[12px] text-rose-500">{a.error}</p>}
                   </div>
                 </div>
@@ -200,6 +256,8 @@ export function App(): JSX.Element {
 }
 
 function StatusDot({ status }: { status: ActionRow["status"] }): JSX.Element {
+  if (status === "awaiting")
+    return <span className="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-sky-400" />;
   if (status === "running")
     return <span className="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-400" />;
   if (status === "done")

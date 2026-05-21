@@ -10,14 +10,16 @@
 
 ## pi 集成后续(已接 pi-ai → infra,pi-agent-core → ctx-task)
 
-- [ ] **Capability 工具**:实现 `AgentTool` 并注入 adapter(filesystem 先行:read_file/list_dir/extract_document)。当前 tools=[],循环空转。
-- [ ] **Trust 守门人落地**:用 ctx-trust 的 RiskClassifier 替换 `allowAllGatekeeper`;`capabilityOf` 改为真实 tool→capability 注册表。
-- [ ] **Reversibility 记账**:接 `afterToolCall`,变更类 Action 写 journal。
-- [ ] **Memory 召回**:接 `transformContext`,把偏好/事实注入上下文 + 标注网页不可信内容(InjectionGuard)。
-- [ ] **Plan/Step 显式建模**:当前 translateEvent 用 taskId 占位 stepId;pi 无 step 概念,需在 ACL 层自建 Plan/Step 并与 pi 的 turn/tool 事件对齐。
-- [ ] **BYO key → Keychain**:`envApiKeyResolver` 仅占位,换成 OS Keychain 实现。
-- [ ] **真实对话验证**:填入 Anthropic key 跑通端到端(目前仅 typecheck + 事件翻译单测,未跑真实 LLM)。
-- [ ] **desktop 接线**:主进程实例化 gateway + adapter,经 IPC 把领域事件流推给渲染层。
+- [x] **Capability 工具**:cap-filesystem 暴露 list_dir/read_file(只读)+ write_file(可变更),已注入 adapter。
+- [x] **Trust 守门人落地**:ctx-trust createGatekeeper 替换了 allowAllGatekeeper(风险分级 + 策略 + 审批 IPC)。capabilityOf 待扩成多能力注册表。
+- [ ] **Reversibility 记账**:接 `afterToolCall`,变更类 Action 写 journal。(阶段 A)
+- [ ] **Memory 召回**:接 `transformContext`,把偏好/事实注入上下文 + 标注网页不可信内容(InjectionGuard)。(阶段 B)
+- [ ] **Plan/Step 显式建模**:当前 translateEvent 用 taskId 占位 stepId;需在 ACL 层自建 Plan/Step 并与 pi 的 turn/tool 事件对齐。(阶段 A)
+- [ ] **BYO key → Keychain**:`envApiKeyResolver` 仅占位,换成 OS Keychain 实现。(阶段 C)
+- [x] **真实对话验证**:DeepSeek 端到端跑通。
+- [x] **desktop 接线**:主进程已实例化 gateway + adapter,领域事件经 IPC 推给渲染层工作区。
+- [ ] **extract_document**:PDF/图片信息提取工具(阶段 B,调研→产出需要)。
+- [ ] **破坏性 fs 工具**:delete(软删)/ move / rename + 执行前 diff 预览整批审批。(阶段 A)
 
 ## 范围/产品
 

@@ -6,6 +6,14 @@ export type ChatStreamEvent =
   | { type: "done" }
   | { type: "error"; message: string };
 
+export interface ApprovalRequest {
+  actionId: string;
+  tool: string;
+  capability: string;
+  riskLevel: string;
+  args: Record<string, unknown>;
+}
+
 /**
  * 受控 IPC 桥。渲染层只能通过 window.pa 访问主进程能力。
  */
@@ -28,6 +36,17 @@ const api = {
       ipcRenderer.on("domain:event", listener);
       return () => ipcRenderer.removeListener("domain:event", listener);
     }
+  },
+  approval: {
+    /** 订阅审批请求,返回取消订阅函数 */
+    onRequest: (cb: (req: ApprovalRequest) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: ApprovalRequest): void => cb(payload);
+      ipcRenderer.on("approval:request", listener);
+      return () => ipcRenderer.removeListener("approval:request", listener);
+    },
+    /** 回传用户决定 */
+    resolve: (actionId: string, approved: boolean): void =>
+      ipcRenderer.send("approval:resolve", { actionId, approved })
   }
 };
 

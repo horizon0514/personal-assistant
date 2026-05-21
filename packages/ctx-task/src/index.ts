@@ -22,24 +22,14 @@ import {
   type ActionId,
   type Capability,
   type DomainEvent,
+  type Gatekeeper,
   type Intent,
   type StepId,
   type TaskId
 } from "@pa/domain-core";
 
-// ── Trust 边界(由 ctx-trust 实现;此处只定接口 + stub)──────────
-export interface ToolCallIntent {
-  readonly capability: Capability;
-  readonly tool: string;
-  readonly args: Readonly<Record<string, unknown>>;
-}
-export interface GateDecision {
-  readonly allow: boolean;
-  readonly reason?: string;
-}
-export interface Gatekeeper {
-  evaluate(call: ToolCallIntent): Promise<GateDecision>;
-}
+// Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。
+export type { Gatekeeper, ToolCallIntent, GateDecision } from "@pa/domain-core";
 /** 占位守门人:全部放行。真实风险分级在 ctx-trust。 */
 export const allowAllGatekeeper: Gatekeeper = {
   async evaluate() {
@@ -118,6 +108,7 @@ export class PiAgentAdapter {
       ): Promise<BeforeToolCallResult | undefined> => {
         const toolName = ctx.toolCall.name;
         const decision = await gate.evaluate({
+          actionId: ctx.toolCall.id as ActionId,
           capability: deps.capabilityOf(toolName),
           tool: toolName,
           args: (ctx.args ?? {}) as Record<string, unknown>

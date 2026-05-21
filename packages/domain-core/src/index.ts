@@ -93,6 +93,24 @@ export interface Task {
   readonly conversationId: ConversationId;
 }
 
+// ── Trust 端口(共享内核:ctx-task 消费,ctx-trust 实现)──────────
+/** 一次待裁决的工具调用 */
+export interface ToolCallIntent {
+  readonly actionId: ActionId;
+  readonly capability: Capability;
+  readonly tool: string;
+  readonly args: Readonly<Record<string, unknown>>;
+}
+/** 守门人裁决结果 */
+export interface GateDecision {
+  readonly allow: boolean;
+  readonly reason?: string;
+}
+/** 守门人端口:每个副作用工具执行前必须经此放行 */
+export interface Gatekeeper {
+  evaluate(call: ToolCallIntent): Promise<GateDecision>;
+}
+
 // ── 领域事件(贯穿上下文的脊柱)───────────────────────────────
 // 后续按上下文细化;此处先立 union 骨架。
 export type DomainEvent =

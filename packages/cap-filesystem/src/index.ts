@@ -5,10 +5,10 @@
  * 风险等级 ReadOnly,会被 Trust 守门人自动放行。
  * 破坏性工具(rename/move/delete/write)留待接入 Reversibility 后再开。
  */
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { Capability } from "@pa/domain-core";
+import type { Capability, RiskLevel } from "@pa/domain-core";
 
 const CAPABILITY: Capability = "filesystem";
 
@@ -57,10 +57,36 @@ const readFileTool: AgentTool<typeof readFileParams> = {
   }
 };
 
+const writeFileParams = Type.Object({
+  path: Type.String({ description: "要写入的文件绝对路径" }),
+  content: Type.String({ description: "写入的完整文本内容(会覆盖原文件)" })
+});
+
+const writeFileTool: AgentTool<typeof writeFileParams> = {
+  name: "write_file",
+  label: "写入文件",
+  description: "把文本内容写入文件(会创建或覆盖)。这是有副作用的操作,需经用户审批。",
+  parameters: writeFileParams,
+  execute: async (_id, { path, content }) => {
+    await writeFile(path, content, "utf8");
+    return textResult(`已写入 ${path}(${Buffer.byteLength(content)} 字节)`, {
+      path,
+      bytes: Buffer.byteLength(content)
+    });
+  }
+};
+
 /** 本能力暴露的工具集 */
-export const filesystemTools: AgentTool<any>[] = [listDirTool, readFileTool];
+export const filesystemTools: AgentTool<any>[] = [listDirTool, readFileTool, writeFileTool];
 
 /** 工具名 → Capability 的映射(供 ctx-task 的 capabilityOf 使用)*/
 export const filesystemToolNames: ReadonlySet<string> = new Set(filesystemTools.map((t) => t.name));
+
+/** 工具名 → 风险等级(供 Trust 风险分级)。能力最懂自己操作的性质。 */
+export const filesystemToolRisk: Readonly<Record<string, RiskLevel>> = {
+  list_dir: "ReadOnly",
+  read_file: "ReadOnly",
+  write_file: "ReversibleMutating"
+};
 
 export { CAPABILITY as filesystemCapability };

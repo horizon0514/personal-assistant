@@ -26,6 +26,9 @@ importers:
       '@pa/ctx-task':
         specifier: workspace:*
         version: link:../../packages/ctx-task
+      '@pa/ctx-trust':
+        specifier: workspace:*
+        version: link:../../packages/ctx-trust
       '@pa/domain-core':
         specifier: workspace:*
         version: link:../../packages/domain-core

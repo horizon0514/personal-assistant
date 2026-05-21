@@ -8,7 +8,13 @@ export default defineConfig({
     // pi 等真实 node 依赖保持外部化。
     plugins: [
       externalizeDepsPlugin({
-        exclude: ["@pa/infra", "@pa/domain-core", "@pa/ctx-task", "@pa/cap-filesystem"]
+        exclude: [
+          "@pa/infra",
+          "@pa/domain-core",
+          "@pa/ctx-task",
+          "@pa/ctx-trust",
+          "@pa/cap-filesystem"
+        ]
       })
     ],
     build: {

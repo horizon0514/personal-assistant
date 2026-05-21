@@ -1,7 +1,8 @@
 import { type IpcMainEvent, type WebContents, ipcMain } from "electron";
-import { PiAgentAdapter, allowAllGatekeeper } from "@pa/ctx-task";
+import { PiAgentAdapter } from "@pa/ctx-task";
+import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { createModel, envApiKeyResolver } from "@pa/infra";
-import { filesystemTools, filesystemToolNames } from "@pa/cap-filesystem";
+import { filesystemTools, filesystemToolNames, filesystemToolRisk } from "@pa/cap-filesystem";
 import { newConversationId, type Capability, type DomainEvent } from "@pa/domain-core";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "anthropic";
@@ -29,6 +30,23 @@ function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
 }
 
+// 待裁决审批:actionId → resolve(approved)
+const pendingApprovals = new Map<string, (approved: boolean) => void>();
+
+/** UI 审批桥:发起审批,等用户在渲染层点同意/拒绝 */
+function requestApproval(ask: ApprovalAsk): Promise<boolean> {
+  return new Promise((resolve) => {
+    pendingApprovals.set(ask.actionId, resolve);
+    sendTo("approval:request", {
+      actionId: ask.actionId,
+      tool: ask.tool,
+      capability: ask.capability,
+      riskLevel: ask.riskLevel,
+      args: ask.args
+    });
+  });
+}
+
 function getAdapter(): PiAgentAdapter {
   if (!adapter) {
     adapter = new PiAgentAdapter({
@@ -36,7 +54,10 @@ function getAdapter(): PiAgentAdapter {
       apiKeyResolver: async (provider) => API_KEY ?? (await envApiKeyResolver(provider)),
       systemPrompt: SYSTEM_PROMPT,
       tools: filesystemTools,
-      gatekeeper: allowAllGatekeeper, // 后续换成 ctx-trust 的风险分级
+      gatekeeper: createGatekeeper({
+        riskOf: riskClassifierFromMap({ ...filesystemToolRisk }),
+        requestApproval
+      }),
       capabilityOf: (tool): Capability => (filesystemToolNames.has(tool) ? "filesystem" : "filesystem"),
       onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
       onEvent: (event: DomainEvent) => sendTo("domain:event", event)
@@ -47,6 +68,15 @@ function getAdapter(): PiAgentAdapter {
 
 export function registerChatIpc(): void {
   ipcMain.handle("chat:model", () => `${PROVIDER} · ${MODEL}`);
+
+  // 渲染层回传审批结果
+  ipcMain.on("approval:resolve", (_e, payload: { actionId: string; approved: boolean }) => {
+    const resolve = pendingApprovals.get(payload.actionId);
+    if (resolve) {
+      pendingApprovals.delete(payload.actionId);
+      resolve(payload.approved);
+    }
+  });
 
   ipcMain.on("chat:send", async (e: IpcMainEvent, text: string) => {
     activeSender = e.sender;
