@@ -41,6 +41,9 @@ import { keyStore } from "./key-store";
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
 const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "deepseek-v4-flash";
 const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
+// vision 覆盖:强行把模型标注为支持图片输入。默认关——已实测 deepseek-v4-flash 的 API
+// 拒收 image_url(只认 text)。将来换到支持图片的模型时设 MAIN_VITE_VISION=1 开启。
+const FORCE_VISION = import.meta.env.MAIN_VITE_VISION === "1";
 
 type ChatStreamEvent = { type: "delta"; text: string } | { type: "done" } | { type: "error"; message: string };
 
@@ -145,16 +148,22 @@ const adapters = new Map<string, PiAgentAdapter>();
 
 function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMessage[]): PiAgentAdapter {
   const memory = getMemory(wsId);
+  const model = createModel({ provider: PROVIDER, modelId: MODEL, forceVision: FORCE_VISION });
+  const modelHasVision = model.input.includes("image");
+  // 模型不收图时不暴露 browser_screenshot——否则截图只会被降级成占位文字,纯误导模型。
+  const activeBrowserTools = modelHasVision
+    ? browserTools
+    : browserTools.filter((t) => t.name !== "browser_screenshot");
   const tools = [
     ...filesystemTools,
     ...documentTools,
-    ...browserTools,
+    ...activeBrowserTools,
     createPlanFileChangesTool(requestBatchApproval),
     // 新记忆的情景里记下它从哪个会话学来的
     ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
   ];
   return new PiAgentAdapter({
-    model: createModel({ provider: PROVIDER, modelId: MODEL }),
+    model,
     // 优先用户在设置里存的 key(safeStorage),其次构建期 .env(dev 兜底),最后环境变量
     apiKeyResolver: async (provider) => keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider)),
     systemPrompt: buildSystemPrompt({
@@ -294,7 +303,14 @@ export const agent = {
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());
       autoTitle(sessions, sessionId, text);
       broadcast("session:changed", sessions.list());
-      sendTo("chat:stream", { type: "done" } satisfies ChatStreamEvent);
+      // pi 出错时不抛异常,错误落在 state 里——主动捞出来让 UI 看到,而非静默结束。
+      const runError = instance.lastError();
+      if (runError) {
+        console.error(`[chat] 运行带错误结束: ${runError}`);
+        sendTo("chat:stream", { type: "error", message: runError } satisfies ChatStreamEvent);
+      } else {
+        sendTo("chat:stream", { type: "done" } satisfies ChatStreamEvent);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sendTo("chat:stream", { type: "error", message } satisfies ChatStreamEvent);

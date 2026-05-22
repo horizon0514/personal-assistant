@@ -212,6 +212,13 @@ export class PiAgentAdapter {
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
         this.deps.onAssistantDelta?.(event.assistantMessageEvent.delta);
       }
+      // 每个 turn 的 assistant 消息收尾:非正常停因(error/aborted)打日志,便于定位被吞的模型错误
+      if (event.type === "message_end") {
+        const m = event.message as { role?: string; stopReason?: string; errorMessage?: string };
+        if (m.role === "assistant" && m.stopReason && m.stopReason !== "stop" && m.stopReason !== "tool_use") {
+          console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
+        }
+      }
       // 任务/动作生命周期 → 领域事件通道
       for (const domainEvent of translator.translate(event)) {
         this.deps.onEvent(domainEvent);
@@ -222,7 +229,15 @@ export class PiAgentAdapter {
     } finally {
       unsubscribe();
     }
+    if (this.agent.state.errorMessage) {
+      console.error(`[agent] 运行结束但带错误: ${this.agent.state.errorMessage}`);
+    }
     return taskId;
+  }
+
+  /** 最近一次运行的错误信息(模型 API 报错等);pi 在出错时不抛异常,错误落在 state 里。 */
+  lastError(): string | undefined {
+    return this.agent.state.errorMessage;
   }
 
   /** 中断当前运行(用户点停止)。pi 会以 aborted 收尾,prompt() 正常 resolve。 */
