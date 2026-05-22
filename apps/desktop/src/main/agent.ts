@@ -192,6 +192,17 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     onEvent: (event: DomainEvent) => sendTo("domain:event", event),
     afterTool: ({ actionId, capability, tool, details, resultText, isError }) => {
       if (isError) return;
+      // 注入检测:web_fetch 抓到疑似注入内容时,报领域事件 + 日志(纵深防御的"提示"层)
+      const inj = details as { injectionSuspected?: boolean; injectionReasons?: string[]; url?: string } | undefined;
+      if (inj?.injectionSuspected) {
+        console.warn(`[security] 疑似 prompt injection @ ${inj.url ?? tool}:`, inj.injectionReasons?.join("、"));
+        sendTo("domain:event", {
+          type: "InjectionSuspected",
+          actionId,
+          source: inj.url ?? tool,
+          reasons: inj.injectionReasons ?? []
+        } satisfies DomainEvent);
+      }
       // 可查看工具:把结果文本推给渲染层,供 step 行"查看"按钮重开到 artifact 面板
       if (VIEWABLE_TOOLS.has(tool) && resultText.trim()) {
         sendTo("step:result", { actionId, body: resultText });
