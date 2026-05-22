@@ -1,6 +1,12 @@
-# Akari（灯）
+<p align="center">
+  <img src="apps/site/public/icon.svg" alt="Akari" width="120" height="120" />
+</p>
 
-面向知识工作者/白领的、去终端化的**本地电脑助理**。Chat 为入口,底层是能自主多步执行的 agent。
+<h1 align="center">Akari（灯）</h1>
+
+<p align="center">面向知识工作者/白领的、去终端化的<strong>本地电脑助理</strong>。Chat 为入口,底层是能自主多步执行的 agent。</p>
+
+---
 
 > 用一句话让它替你操作文件、网页与文档——本地运行,登录态闭网访问,带个人记忆。
 
