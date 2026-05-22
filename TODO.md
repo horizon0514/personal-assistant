@@ -110,6 +110,11 @@
 
 - [ ] 团队规模与排期确定后,复审 V1 范围,大概率砍"破坏性文件操作"。
 - [ ] 公开网页调研是否并入搜索 API(Tavily/Exa),与登录态浏览器两条路并存。
-- [ ] Prompt injection 纵深防御的系统化设计。
-- [ ] Mac 代码签名 + 公证;Electron 自动更新通道。
+- [x] ~~Prompt injection 纵深防御的系统化设计~~ ✅ 已落地(domain-core markUntrusted/detectInjection + 信任边界条款 + InjectionSuspected;见 status-and-roadmap §1)。
+- [ ] **开箱即用 = 干掉 BYO Key**(最大采用拐点):内置 deepseek + 注册登录,与商业化(后端/登录/计费)合流。**已认领,与分发后续统一做。**
+- [ ] Mac 代码签名 + 公证;Electron 自动更新通道。**已认领,与开箱即用统一做。**
 - [ ] 商业化(BYO 先免费验证 → 网关层切订阅制)。
+- [ ] **沙箱(执行隔离)**:给 agent 操作划硬边界(scoped 目录/禁系统文件/受限 shell 在隔离环境跑),信任从软约束推进到硬隔离。见 status-and-roadmap 阶段 D #12。
+- [ ] **IM 集成(优先飞书/Lark)**:(a) 读/总结/起草/发消息;(b) IM 作触发通道,从手机/IM 派活拿到移动性 + 主动推送。见 status-and-roadmap 阶段 D #13。
+
+> 产品视角的成败关键与排序见 [`research/status-and-roadmap.md`](research/status-and-roadmap.md) §5。
