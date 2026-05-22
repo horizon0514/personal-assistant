@@ -299,17 +299,6 @@ export class BrowserManager implements BrowserController {
     return { found: false };
   }
 
-  async scroll(opts: { selector?: string; deltaY?: number }, signal?: AbortSignal): Promise<{ url: string }> {
-    const wc = await this.currentWebview(signal);
-    await wc.executeJavaScript(
-      opts.selector
-        ? `(() => { const el = document.querySelector(${JSON.stringify(opts.selector)}); if (el) el.scrollIntoView({ block: 'center', behavior: 'instant' }); })()`
-        : `window.scrollBy(0, ${Number(opts.deltaY) || 800})`,
-      true
-    );
-    await new Promise((r) => setTimeout(r, 200));
-    return { url: wc.getURL() };
-  }
 
   async screenshot(signal?: AbortSignal): Promise<{ data: string; url: string }> {
     const wc = await this.currentWebview(signal);
@@ -321,10 +310,9 @@ export class BrowserManager implements BrowserController {
     return { data: res.data, url: wc.getURL() };
   }
 
-  async fetch(url: string, signal?: AbortSignal): Promise<FetchedPage> {
-    const wc = await this.navigate(url, signal);
-    await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
-    const page = (await wc.executeJavaScript(
+  /** 提取当前 webview 已加载页面的可读正文(不导航)。fetch 与 current 共用。 */
+  private async readReadable(wc: WebContents): Promise<FetchedPage> {
+    return (await wc.executeJavaScript(
       `(() => {
         const pick = document.querySelector('article') || document.querySelector('main') || document.body;
         const clone = pick.cloneNode(true);
@@ -334,6 +322,17 @@ export class BrowserManager implements BrowserController {
       })()`,
       true
     )) as FetchedPage;
-    return page;
+  }
+
+  async fetch(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+    const wc = await this.navigate(url, signal);
+    await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
+    return this.readReadable(wc);
+  }
+
+  /** 读当前 webview 正在显示的页面(用户可能手动导航过来的),不触发导航。 */
+  async current(signal?: AbortSignal): Promise<FetchedPage> {
+    const wc = await this.currentWebview(signal);
+    return this.readReadable(wc);
   }
 }

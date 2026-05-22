@@ -24,7 +24,7 @@
 **能力(支撑域)**
 - cap-filesystem:`list_dir`/`read_file`/`find_files`/`grep_files`(只读)、`write_file`/`move_file`/`delete`(可逆变更)、`plan_file_changes`(批量 move/delete,diff 预览 + 整批审批 + 批量回滚)
 - cap-document:`extract_document`(PDF + 纯文本类提取)
-- cap-browser:`web_search`/`web_fetch`(调研)+ `browser_click`/`browser_type`/`browser_wait`/`browser_scroll`/`browser_screenshot`(自动化)。驱动内置 `<webview>` Chromium,自动化经 `webContents.debugger`(CDP)+ 虚拟光标;`persist:research` 登录态。截图(`browser_screenshot`)默认隐藏(deepseek API 不收图,`MAIN_VITE_VISION=1` 可开)
+- cap-browser:`web_search`/`web_fetch`/`read_current_page`(调研/读当前页)+ `browser_click`/`browser_type`(自动化,带可选 `waitFor`)+ `browser_screenshot`(默认隐藏)。驱动内置 `<webview>` Chromium,自动化经 `webContents.debugger`(CDP)+ 虚拟光标;`persist:research` 登录态。截图默认隐藏(deepseek API 不收图,`MAIN_VITE_VISION=1` 可开)。**2026-05-22 瘦身:砍 browser_wait(折进 waitFor)/ browser_scroll(低价值),守「少而粗」**
 
 **信任 / 可逆(核心域)**
 - ctx-trust:`createGatekeeper` —— 风险分级 → 策略 → 只读自动放行 / 需审批异步等待 / 拒绝拦截;审批内联到对应 action 行(同意/拒绝)
@@ -45,7 +45,7 @@
 
 | 项 | 现状 | 影响 |
 |----|------|------|
-| **WebResearch / Browser** | cap-browser 已落地:调研(web_search/web_fetch)+ 自动化(click/type/wait/scroll/screenshot),驱动自带 Chromium;cap-webresearch 仍空壳(已被取代,待删) | 调研 + 自动化 v1 已做;**待运行时验证**真实站点选择器/登录态(见 TODO) |
+| **WebResearch / Browser** | cap-browser 已落地:调研(web_search/web_fetch/read_current_page)+ 自动化(click/type,带 waitFor);driver=自带 Chromium;cap-webresearch 仍空壳(已被取代,待删) | 调研 + 自动化 v1 已做;**待运行时验证**真实站点选择器/登录态(见 TODO) |
 | **多 provider UI** | 已决策**暂不做**:专注 deepseek | 非缺口;未来走"内置 deepseek + 登录开箱即用",非多 provider 切换 |
 | **SQLite** | 现用文件 JSON 持久化(够用) | 数据量大或需查询时再考虑;非阻塞 |
 | **打包分发** | 进行中(electron-builder/CI/签名雏形,见近期 commit) | 公证/自动更新通道待打通 |
@@ -65,7 +65,7 @@
 6. ~~多 provider / 模型选择 UI~~ **暂不做**(2026-05-22 决策):专注 deepseek。未来方向是"内置 deepseek + 用户注册登录开箱即用"(无需 BYO key),与商业化路线(网关切服务器中转 + 订阅制)合流,而非多 provider 切换。
 
 ### 阶段 C —— 闭网与硬化
-7. ~~**BrowserSession 能力 + 注入隔离**~~ ✅ 已做(2026-05-22):登录态 + 自动化(click/type/wait/scroll/screenshot)驱动内置 webview Chromium,经 `webContents.debugger`(CDP,**非 Playwright**);注入纵深防御(标注隔离 + 信任边界条款 + 启发式检测)已落地。**待运行时验证**:真实站点选择器/登录态留存(见 TODO「浏览器运行时验证」)。
+7. ~~**BrowserSession 能力 + 注入隔离**~~ ✅ 已做(2026-05-22):登录态 + 自动化(read_current_page/click/type,带 waitFor)驱动内置 webview Chromium,经 `webContents.debugger`(CDP,**非 Playwright**);注入纵深防御(标注隔离 + 信任边界条款 + 启发式检测)已落地。**待运行时验证**:真实站点选择器/登录态留存(见 TODO「浏览器运行时验证」)。
 8. **key 安全存储 + SQLite**:key 已用 Electron `safeStorage`(✅);持久化暂用文件 JSON,SQLite 待数据量/查询需要时再上。
 9. **打包分发**:Mac 代码签名 + 公证 + 自动更新(进行中)
 

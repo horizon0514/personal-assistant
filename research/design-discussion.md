@@ -323,9 +323,9 @@ WebResearch 不走搜索 API,改为驱动浏览器。架构岔路对照了 OpenC
 
 实现要点:
 - 分层:`cap-browser` 只定义 `BrowserController` 接口 + 工具 schema(保持 electron-free);Electron 驱动放 `apps/desktop/src/main/browser-manager.ts`,组合根注入。
-- 工具粒度(决策 4):起步 `web_search` + `web_fetch` 两个高层语义工具。**2026-05-22 扩展为网页自动化**:新增 `browser_click` / `browser_type` / `browser_wait` / `browser_scroll` / `browser_screenshot`,操作 web_fetch 打开的同一个可见 webview。
+- 工具粒度(决策 4):起步 `web_search` + `web_fetch`。**2026-05-22 扩展网页自动化,随后瘦身**:现为 `read_current_page`(读当前页不导航)+ `browser_click` / `browser_type`(带可选 `waitFor`)+ `browser_screenshot`(默认隐藏)。已砍 `browser_wait`(折进 click/type 的 waitFor)、`browser_scroll`(低价值)——守「少而粗」纪律,长尾靠将来 code-exec 兜底,不细粒度增殖。
   - **驱动用 Electron `webContents.debugger`(进程内 CDP),不用 Playwright。** 用 Playwright 现成库要 `connectOverCDP` + `--remote-debugging-port`,那个本机调试端口让任意本机进程能掏 cookie/DOM,对"托管登录态的可信本机助理"是真实攻击面——正是当初否掉 remote-debugging 的同一理由。`debugger` 进程内、不开端口、且给真实可信输入事件(`isTrusted=true`)。代价:无 auto-wait/locator 现成糖,自包装 ~150 行。读查询走 `executeJavaScript`,真实输入与截图走 debugger(`Input.*` / `Page.captureScreenshot`)。
-  - 风险分级:`browser_click`/`browser_type` → `ReversibleMutating` 强制审批(本节"改状态强制审批");`wait`/`scroll`/`screenshot` 只读自动放行。
+  - 风险分级:浏览器工具全 `ReadOnly` 自动放行(本节修订:操作不弹审批,不可逆对外动作靠提示层确认)。
 - 搜索抓 SERP(脆),起步用 DuckDuckGo / Bing,避开 Google 反爬。
 - 登录态:遇登录墙时让用户在可见视图登一次,cookie 走 persist partition 留存。
 - 实例首次调用时创建、跨多次 tool call 保活。
