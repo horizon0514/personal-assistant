@@ -47,7 +47,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: "Personal Assistant",
+    title: "Akari",
     show: false,
     // macOS:隐藏标题栏 + 红绿灯内移 + 窗口毛玻璃
     titleBarStyle: isMac ? "hiddenInset" : "default",

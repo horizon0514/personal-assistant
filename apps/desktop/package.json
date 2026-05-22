@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "main": "./out/main/index.js",
+  "author": "horizon0514",
+  "description": "面向知识工作者的去终端化本地电脑助理",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "preview": "electron-vite preview",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "package": "electron-vite build && electron-builder",
+    "package:dir": "electron-vite build && electron-builder --dir",
+    "package:mac": "electron-vite build && electron-builder --mac",
+    "package:win": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.75.4",

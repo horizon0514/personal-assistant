@@ -1,0 +1,53 @@
+appId: com.horizon.akari
+productName: Akari
+# 版本号与产物名取自 package.json 的 version 字段。
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+# 只把构建产物和必要元数据打进包,源码/配置不进包。
+# 运行时依赖(@earendil-works/* 等)由 electron-builder 依据 package.json
+# 的 dependencies 自动收集(配合根目录 .npmrc 的 node-linker=hoisted)。
+files:
+  - out/**
+  - package.json
+
+directories:
+  output: release/${version}
+  buildResources: build
+
+# 未提供图标时使用 Electron 默认图标;放置 build/icon.icns 与 build/icon.ico 即可自动启用。
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  # 签名预留:CI 注入 CSC_LINK / CSC_KEY_PASSWORD 后自动签名;
+  # 未注入证书时 electron-builder 退化为 ad-hoc 签名(本地可运行,分发会有 Gatekeeper 提示)。
+  # 公证预留:配置 APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID 后将 notarize 改为 true。
+  notarize: false
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 签名预留:CI 注入 CSC_LINK / CSC_KEY_PASSWORD 后自动签名。
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+# 仅当显式 --publish 时上传;Release workflow 走 GitHub Releases。
+publish:
+  provider: github
+  owner: horizon0514
+  repo: personal-assistant

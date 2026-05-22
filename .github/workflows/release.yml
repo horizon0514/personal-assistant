@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# 需要写权限以创建 Release 并上传产物。
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 先构建所有 workspace 包(含 @pa/desktop 的 electron-vite build)。
+      - name: Build
+        run: pnpm -r build
+
+      # 由 electron-builder 打包并发布到 GitHub Release(草稿)。
+      - name: Package & publish
+        run: pnpm --filter @pa/desktop exec electron-builder --publish always
+        env:
+          # GitHub Release 上传凭证(自动注入,无需手动配置)。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ── 代码签名预留(在仓库 Settings → Secrets 中配置后自动生效)──
+          # macOS / Windows 通用:base64 编码的证书 + 密码。
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # macOS 公证(配置后再把 electron-builder.yml 的 mac.notarize 改为 true)。
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
