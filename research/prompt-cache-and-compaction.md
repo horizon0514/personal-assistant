@@ -60,10 +60,10 @@ contextTokens > contextWindow - reserveTokens   // reserveTokens 默认 16384
 | **1 双标记 cache** | 滚动双标记 + 回退容错 | pi 单尾标记,无回退容错 | 内核管,不重造;知其边界即可 |
 | **2 system prompt 字节冻结** | 动态信息禁入 system prompt | ❌ `system-prompt.ts` 把 `date/OS/cwd` 烤进 system prompt;断点 #1 每天/每次重建即失效 | **我们的责任,待修(P0)** |
 | **3 invoke_skill 子 Agent** | 统一入口 + 状态隔离,主 history 不被污染 | 无子 Agent 机制 | 成长期补(见 §4) |
-| **4 工具集 16 个稳定** | 粗粒度、schema 稳定 | 现 ~11 个;`cap-browser`/`cap-webresearch` 待接入 | 扩张时守 schema 稳定(见 §4) |
+| **4 工具集 16 个稳定** | 粗粒度、schema 稳定 | `cap-browser` 已接入(7 个:调研 + 自动化);`cap-webresearch` 已被取代 | 扩张时守 schema 稳定(见 §4) |
 | **5 压缩:同模型 + 空闲 + 压到底** | Insert-then-Compress + 空闲定时 + 压到 ~1万 | pi 独立 call 压缩、被动触发、保留 20K | 部分偏离;空闲压缩是 App 机会 |
 | **6 文档处理脚本自进化** | Python 脚本 copy 到用户目录,Agent 自维护 | `cap-document` 是内置工具 | TS/Electron 栈下优先级低,记录备查 |
-| **7 浏览器:接管用户 Chrome,非 headless** | 用已登录的 Chrome/Edge,看得见 | roadmap 阶段 C 写的是 Playwright 内置 profile | ⚠️ 与「登录态闭网访问」定位有张力,见 §5 |
+| **7 浏览器:接管用户 Chrome,非 headless** | 用已登录的 Chrome/Edge,看得见 | **已定(2026-05-22):驱动 Electron 自带 Chromium**(可见 webview + CDP),不接管用户 Chrome、不用 Playwright | ✅ 已落地;决策见 design-discussion「内置浏览器调研」 |
 
 **我们已经做对的**(对照文章开篇反 RAG):`ctx-memory` 用 `render()` 注入 `- [id] content` + `search_memory` 工具做混合召回,**无向量库**。文章判断 90% 召回率有害、需 97%+,继续保持,抵抗未来加 embedding 的诱惑。
 
@@ -83,9 +83,9 @@ contextTokens > contextWindow - reserveTokens   // reserveTokens 默认 16384
 - [x] **P0 · system prompt 冻结**(决策 2)✅ 2026-05-22:`system-prompt.ts` 的 `buildSystemPrompt` 移除 `date/OS/homedir/tmpdir` 插值,改为「不接受环境参数」的字节冻结版;新增 `buildSessionContext()` 产出 `[session context]` 块(日期/OS/主目录/临时目录/模型)。`agent.ts` 的 `contextProvider` 改为 `[buildSessionContext(), memory.render()].join`,经 pi 的 `transformContext` 作为前置消息每轮注入、不写入 transcript。全包 typecheck + test 通过。
   - **遗留小账(已评估,见下「记忆召回的头部注入损耗」)**:`transformContext` 把注入块放在 messages **最前面**(`[injected, ...messages]`,见 `ctx-task/src/index.ts:179`)。env 部分 session 内稳定,不添乱;但 `memory.render()` 变化时会让其后整段 history cache-miss。结论是**现在不修,带触发条件登记**。
 - [ ] **P1 · 空闲压缩**(决策 5):利用窗口失焦 / 输入停顿信号,在接近阈值且 cache 仍热(< TTL)时主动调用 pi 压缩。需先确认 pi 是否暴露手动 `compact()` 入口。
-- [ ] **P1 · browser 工具粗粒度**(决策 4):`cap-browser` 对外只暴露 1 个语义工具,schema 冻结。
+- [x] **P1 · browser 工具粒度**(决策 4):`cap-browser` 暴露 7 个工具(web_search/web_fetch + 5 个自动化操作),schema 稳定。注:超出当初设想的「1 个语义工具」,但粒度仍粗、稳定。
 - [ ] **P2 · 子 Agent 入口**(决策 3):评估在 browser/webresearch 落地前引入统一隔离入口。
-- [ ] **P2 · 浏览器方向再确认**(决策 7):roadmap 阶段 C 的「Playwright 内置 profile」对照「接管用户已登录 Chrome」,与「登录态闭网访问」定位做一次决策(见 design-discussion 开放问题)。
+- [x] **P2 · 浏览器方向**(决策 7):已定(2026-05-22)——驱动 Electron 自带 Chromium(可见 webview + CDP),不接管用户 Chrome、不用 Playwright。见 design-discussion「内置浏览器调研」。
 - [ ] **可选 · `PI_CACHE_RETENTION=long`**:长会话桌面场景(用户常走开),若模型支持 1h TTL,评估默认开启以减少 TTL 过期导致的全量 cold。
 
 ---

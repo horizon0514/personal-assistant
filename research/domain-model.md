@@ -151,30 +151,28 @@ DDD 的首要动作是**区分核心域 / 支撑域 / 通用域**:把自研精�
 
 #### 3.6a FileSystem Capability
 - **聚合根 `FileOperation`**:`kind`(Read/Rename/Move/Delete/Write/Create)、`targets`、`params`
-- **概念**:`FileNode`(path、type)、`DocumentExtraction`(PDF/图片 → 结构化数据)
-- **Tool**:`read_file`、`list_dir`、`extract_document`、`rename`、`move`、`delete`、`write_document`、`build_spreadsheet`
+- **概念**:`FileNode`(path、type)、`DocumentExtraction`(PDF/纯文本 → 文本;图片 OCR / docx 待做)
+- **Tool(实际)**:`list_dir`、`read_file`、`find_files`、`grep_files`、`write_file`、`move_file`、`delete`、`plan_file_changes`(批量 move/delete diff 审批);文档提取 `extract_document` 在独立的 `cap-document`。文档产出(`write_document`/`build_spreadsheet`)待做
 - **领域事件**:`FileRead`、`DocumentExtracted`、`FileMutationProposed`、`FileMutated`
 - **关系**:变更操作 → Reversibility(supplier);所有操作 → Trust(被网关)
 
-#### 3.6b WebResearch Capability
-- **聚合根 `ResearchQuery`**:`query`、`results[]`、`sources[]`
-- **概念**:`Source`(url、title、snippet、retrievedAt)、`ResearchFinding`
-- **Tool**:`web_search`(搜索 API)、`fetch_extract`
-- **领域事件**:`SearchPerformed`、`SourceFetched`、`FindingCompiled`
-- **不变量**:所有抓取内容标记为不可信(交 InjectionGuard)
+#### 3.6b WebResearch Capability —— ⚠️ 已并入 BrowserSession(`cap-browser`)
+> 实现校正(2026-05-22):**不走搜索 API**,改为驱动内置浏览器。原 WebResearch 的职责(搜索/抓取)由 `cap-browser` 的 `web_search`/`web_fetch` 承担(抓 SERP + 正文提取),`cap-webresearch` 已是空壳待删。下面的概念仍成立,只是不再是独立上下文。
+- **概念**:`Source`(url、title、snippet)、`ResearchFinding`
+- **不变量**:所有抓取内容标记为不可信(交 InjectionGuard;已落地 `markUntrusted`/`detectInjection`)
 
 #### 3.6c BrowserSession Capability
-- **聚合根 `BrowserSession`**:`profileId`、`loggedInServices[]`、当前页面状态
-  - 实体 `BrowserProfile`:Playwright persistent context;凭证经 Credential Store
-- **概念**:`PageAction`(navigate/click/fill/read)、`PageSnapshot`
-- **Tool**:`open_url`、`read_page`、`click`、`fill`、`screenshot`
-- **领域事件**:`SessionOpened`、`LoggedInDetected`、`PageActionProposed`、`PageActionExecuted`
-- **不变量**:改状态的 PageAction 永远需审批(Trust);页面内容不可信
+- **聚合根 `BrowserSession`**:`loggedInServices[]`、当前页面状态
+  - 实体 `BrowserProfile`:**Electron `<webview>` 的 `persist:research` partition**(持久登录态,助理自己的浏览器身份);**驱动用 `webContents.debugger`(进程内 CDP),非 Playwright**
+- **概念**:`PageAction`(navigate/click/type/scroll/read)、`PageSnapshot`
+- **Tool(实际)**:`web_search`、`web_fetch`、`browser_click`、`browser_type`、`browser_wait`、`browser_scroll`、`browser_screenshot`
+- **领域事件**:`InjectionSuspected`(已落地);页面操作走通用 Task/Action 事件
+- **不变量**:页面内容不可信(InjectionGuard)。改状态动作**不再强制工具级审批**(2026-05-22 决策:可见面板即监督),不可逆对外动作(发送/购买/删除/发帖)靠系统信任边界条款 + guidelines 让模型执行前向用户确认
 
 ### 3.7 通用底座
-- **Model Gateway**(pi-ai):provider/模型选择、BYO key。用 ACL 隔离,领域不依赖具体 provider
+- **Model Gateway**(pi-ai):BYO key、网关抽象。用 ACL 隔离,领域不依赖具体 provider。**现状专注 deepseek**(不做多 provider 切换 UI,2026-05-22 决策)
 - **Agent Runtime**(pi-agent-core):loop/compaction/session,被 Task Orchestration 的 ACL 包裹
-- **Credential Store**:OS Keychain 存浏览器登录态。Conformist(直接遵从系统 API)
+- **Credential Store**:浏览器登录态存于 webview `persist:research` partition(Chromium cookie);API key 经 Electron `safeStorage` 加密落盘。Conformist(直接遵从系统 API)
 
 ---
 
