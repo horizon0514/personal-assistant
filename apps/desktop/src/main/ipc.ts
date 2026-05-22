@@ -24,6 +24,8 @@ export function registerIpc(): void {
   ipcMain.handle("session:create", () => agent.createSession());
   ipcMain.handle("session:open", (_e, sessionId: string) => agent.openSession(sessionId));
   ipcMain.handle("session:archive", (_e, sessionId: string) => agent.archiveSession(sessionId));
+  ipcMain.handle("session:listArchived", () => agent.listArchivedSessions());
+  ipcMain.handle("session:unarchive", (_e, sessionId: string) => agent.unarchiveSession(sessionId));
 
   // Secret:BYO API Key(全局)
   ipcMain.handle("secret:apiKeyStatus", () => agent.apiKeyStatus());
@@ -41,6 +43,7 @@ export function registerIpc(): void {
   ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string }) =>
     void agent.send(e.sender, p.sessionId, p.text)
   );
+  ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 
   // Trust:单工具审批
   ipcMain.on("approval:resolve", (_e, p: { actionId: string; approved: boolean }) =>

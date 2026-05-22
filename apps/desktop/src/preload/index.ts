@@ -35,6 +35,14 @@ export interface PersistedAction {
   capability: string;
   status: "done" | "failed";
   error?: string;
+  /** 工具结果文本(可查看工具),供"查看"按钮重开到 artifact 面板 */
+  resultBody?: string;
+}
+
+/** step:result 负载:某动作产出的可查看文本结果。 */
+export interface StepResult {
+  actionId: string;
+  body: string;
 }
 export type TimelineItem =
   | { kind: "msg"; id: string; role: "user" | "assistant"; content: string }
@@ -84,6 +92,10 @@ const api = {
     open: (sessionId: string): Promise<TimelineItem[]> => ipcRenderer.invoke("session:open", sessionId),
     /** 归档会话(从列表隐藏,不删 transcript) */
     archive: (sessionId: string): Promise<void> => ipcRenderer.invoke("session:archive", sessionId),
+    /** 当前 workspace 的已归档会话 */
+    listArchived: (): Promise<SessionRecord[]> => ipcRenderer.invoke("session:listArchived"),
+    /** 恢复归档会话(重回活跃列表) */
+    unarchive: (sessionId: string): Promise<void> => ipcRenderer.invoke("session:unarchive", sessionId),
     /** 会话列表变化(如自动命名/落盘后) */
     onChanged: (cb: (sessions: SessionRecord[]) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, payload: SessionRecord[]): void => cb(payload);
@@ -98,6 +110,8 @@ const api = {
   },
   chat: {
     send: (sessionId: string, text: string): void => ipcRenderer.send("chat:send", { sessionId, text }),
+    /** 停止当前会话正在进行的运行 */
+    stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
     /** 订阅流式事件,返回取消订阅函数 */
     onStream: (cb: (event: ChatStreamEvent) => void): (() => void) => {
@@ -112,6 +126,22 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: DomainEvent): void => cb(payload);
       ipcRenderer.on("domain:event", listener);
       return () => ipcRenderer.removeListener("domain:event", listener);
+    }
+  },
+  step: {
+    /** 订阅可查看工具的结果文本(live 运行时),供"查看"按钮重开到 artifact 面板 */
+    onResult: (cb: (res: StepResult) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: StepResult): void => cb(payload);
+      ipcRenderer.on("step:result", listener);
+      return () => ipcRenderer.removeListener("step:result", listener);
+    }
+  },
+  browser: {
+    /** 主进程请求打开「浏览器」artifact(抓取前自动弹出,渲染层据此挂载 <webview>) */
+    onShow: (cb: () => void): (() => void) => {
+      const listener = (): void => cb();
+      ipcRenderer.on("browser:show", listener);
+      return () => ipcRenderer.removeListener("browser:show", listener);
     }
   },
   approval: {

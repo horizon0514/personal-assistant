@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Archive, SquarePen } from "lucide-react";
 import { useShell } from "../shell/store";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { ArchivedSessions } from "./ArchivedSessions";
 
 /** 最左栏:当前 workspace 的会话列表 + 左下角 workspace 切换/设置。可折叠、可调宽。 */
 export function SessionList(): JSX.Element {
@@ -82,6 +83,8 @@ export function SessionList(): JSX.Element {
           ))
         )}
       </div>
+
+      <ArchivedSessions />
 
       <WorkspaceSwitcher />
 

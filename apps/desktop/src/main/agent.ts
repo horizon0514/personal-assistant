@@ -31,9 +31,11 @@ import {
   type FileChangeOp
 } from "@pa/cap-filesystem";
 import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
+import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
+import { BrowserManager } from "./browser-manager";
 import { newConversationId, type Capability, type DomainEvent, type RiskLevel } from "@pa/domain-core";
-import { buildSystemPrompt } from "./system-prompt";
-import { transcriptToTimeline } from "./transcript-to-timeline";
+import { buildSystemPrompt, buildSessionContext } from "./system-prompt";
+import { transcriptToTimeline, VIEWABLE_TOOLS } from "./transcript-to-timeline";
 import { keyStore } from "./key-store";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
@@ -47,6 +49,7 @@ const capabilityByTool = new Map<string, Capability>();
 for (const t of memoryToolNames) capabilityByTool.set(t, "memory");
 for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
+for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
 
 // ── 持久化根 ─────────────────────────────────────────────────
@@ -93,6 +96,10 @@ function getSessions(wsId: string): SessionStore {
 // ── Reversibility(全局 journal)────────────────────────────
 const journal = new OperationJournal();
 journal.registerReverser("filesystem", filesystemReverser);
+
+// ── 内置浏览器(全局保活,跨会话共享 persist 登录态)──────────
+const browser = new BrowserManager();
+const browserTools = createBrowserTools(browser);
 
 // ── 审批 / 批量 桥 ──────────────────────────────────────────
 let activeSender: WebContents | undefined;
@@ -141,6 +148,7 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
   const tools = [
     ...filesystemTools,
     ...documentTools,
+    ...browserTools,
     createPlanFileChangesTool(requestBatchApproval),
     // 新记忆的情景里记下它从哪个会话学来的
     ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
@@ -151,25 +159,34 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     apiKeyResolver: async (provider) => keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider)),
     systemPrompt: buildSystemPrompt({
       tools: tools.map((t) => ({ name: t.name, description: t.description })),
-      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines]
+      guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]
     }),
     thinkingLevel: "high",
     tools,
     initialMessages,
-    contextProvider: () => memory.render(),
+    // 注入 [session context](环境信息,决策 2:不进字节冻结的 system prompt)+ 记忆召回。
+    // 经 transformContext 作为前置消息每轮注入,不写入持久 transcript。
+    contextProvider: () =>
+      [buildSessionContext({ modelLabel: `${PROVIDER} · ${MODEL}` }), memory.render()]
+        .filter((s): s is string => Boolean(s && s.trim()))
+        .join("\n\n"),
     gatekeeper: createGatekeeper({
       riskOf: (call): RiskLevel =>
         // plan_file_changes 内部自做批量审批;记忆工具按决策自动执行+可见+可逆(不审批)
         call.tool === "plan_file_changes" || memoryToolNames.has(call.tool)
           ? "ReadOnly"
-          : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk })(call),
+          : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call),
       requestApproval
     }),
     capabilityOf,
     onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
     onEvent: (event: DomainEvent) => sendTo("domain:event", event),
-    afterTool: ({ actionId, capability, tool, details, isError }) => {
+    afterTool: ({ actionId, capability, tool, details, resultText, isError }) => {
       if (isError) return;
+      // 可查看工具:把结果文本推给渲染层,供 step 行"查看"按钮重开到 artifact 面板
+      if (VIEWABLE_TOOLS.has(tool) && resultText.trim()) {
+        sendTo("step:result", { actionId, body: resultText });
+      }
       const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)?.reversal;
       if (!reversal) return;
       const summary =
@@ -250,6 +267,14 @@ export const agent = {
     getSessions(activeWorkspaceId).setArchived(sessionId, true);
     if (activeSessionId === sessionId) activeSessionId = "";
   },
+  /** 当前 workspace 的已归档会话(供"已归档"列表查看/恢复)。 */
+  listArchivedSessions: (): SessionRecord[] => getSessions(activeWorkspaceId).listArchived(),
+  /** 恢复归档会话:重回活跃列表(广播 session:changed 让渲染层刷新)。 */
+  unarchiveSession(sessionId: string): void {
+    const sessions = getSessions(activeWorkspaceId);
+    sessions.setArchived(sessionId, false);
+    broadcast("session:changed", sessions.list());
+  },
 
   async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
     activeSender = sender;
@@ -274,6 +299,11 @@ export const agent = {
       const message = err instanceof Error ? err.message : String(err);
       sendTo("chat:stream", { type: "error", message } satisfies ChatStreamEvent);
     }
+  },
+
+  /** 停止某会话正在进行的运行(中断 agent loop)。 */
+  stop(sessionId: string): void {
+    adapters.get(sessionId)?.abort();
   },
 
   resolveApproval(actionId: string, approved: boolean): void {

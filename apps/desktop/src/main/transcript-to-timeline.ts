@@ -11,6 +11,17 @@
 import type { AgentMessage } from "@pa/ctx-task";
 import type { Capability } from "@pa/domain-core";
 
+/** 结果可在 artifact 面板查看的工具(产出文本内容的只读类)。 */
+export const VIEWABLE_TOOLS: ReadonlySet<string> = new Set([
+  "read_file",
+  "extract_document",
+  "list_dir",
+  "find_files",
+  "grep_files",
+  "web_search",
+  "web_fetch"
+]);
+
 interface TimelineAction {
   id: string;
   stepId: string;
@@ -18,6 +29,8 @@ interface TimelineAction {
   capability: Capability;
   status: "done" | "failed";
   error?: string;
+  /** 工具结果文本(仅 VIEWABLE_TOOLS),供"查看"按钮在 artifact 面板展示 */
+  resultBody?: string;
 }
 type TimelineItem =
   | { kind: "msg"; id: string; role: "user" | "assistant"; content: string }
@@ -75,6 +88,9 @@ export function transcriptToTimeline(
       if (a && raw.isError) {
         a.status = "failed";
         a.error = textOf(raw.content);
+      } else if (a && VIEWABLE_TOOLS.has(a.tool)) {
+        const body = textOf(raw.content);
+        if (body.trim()) a.resultBody = body;
       }
     }
   }

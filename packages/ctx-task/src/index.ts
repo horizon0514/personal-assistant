@@ -139,6 +139,8 @@ export interface PiAgentAdapterDeps {
     capability: Capability;
     tool: string;
     details: unknown;
+    /** 工具结果的纯文本(模型看到的内容,供"查看"等 UI 用) */
+    resultText: string;
     isError: boolean;
   }) => void | Promise<void>;
 }
@@ -181,11 +183,18 @@ export class PiAgentAdapter {
         : undefined,
       afterToolCall: async (ctx: AfterToolCallContext) => {
         const toolName = ctx.toolCall.name;
+        const resultText = Array.isArray(ctx.result?.content)
+          ? ctx.result.content
+              .filter((b): b is { type: "text"; text: string } => (b as { type?: string })?.type === "text")
+              .map((b) => b.text)
+              .join("\n")
+          : "";
         await deps.afterTool?.({
           actionId: ctx.toolCall.id as ActionId,
           capability: deps.capabilityOf(toolName),
           tool: toolName,
           details: ctx.result.details,
+          resultText,
           isError: ctx.isError
         });
         return undefined;
@@ -214,6 +223,11 @@ export class PiAgentAdapter {
       unsubscribe();
     }
     return taskId;
+  }
+
+  /** 中断当前运行(用户点停止)。pi 会以 aborted 收尾,prompt() 正常 resolve。 */
+  abort(): void {
+    this.agent.abort();
   }
 
   /** 当前 transcript 快照(持久化以便日后恢复会话)。 */

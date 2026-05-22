@@ -2,6 +2,7 @@ import "./app-identity"; // 必须最先执行:设 app 名与 userData 目录(�
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { registerIpc } from "./ipc";
+import { setMainWindow } from "./main-window";
 import { installAppMenu } from "./menu";
 import { appSettings, type ThemeSource } from "./app-settings";
 import { initAutoUpdate, checkForUpdatesManual } from "./updater";
@@ -51,19 +52,21 @@ function createWindow(): void {
     minHeight: 600,
     title: "Akari",
     show: false,
-    // macOS:隐藏标题栏 + 红绿灯内移 + 窗口毛玻璃
+    // macOS:隐藏标题栏 + 红绿灯内移
     titleBarStyle: isMac ? "hiddenInset" : "default",
     trafficLightPosition: isMac ? { x: 16, y: 18 } : undefined,
     backgroundColor: themedBg(),
     webPreferences: {
-      preload: join(__dirname, "../preload/index.mjs"),
+      preload: PRELOAD,
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      webviewTag: true // 内置调研浏览器用 <webview> 嵌在 ArtifactPanel
     }
   });
 
   win.once("ready-to-show", () => win.show());
+  setMainWindow(win);
   loadEntry(win, "index.html");
 }
 

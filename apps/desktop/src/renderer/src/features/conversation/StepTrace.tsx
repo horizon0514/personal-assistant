@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, Check, ChevronRight, Clock, Loader2, Undo2 } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Clock, Eye, Loader2, Undo2 } from "lucide-react";
 
 /** 对话内联执行轨迹:工具按 step 归组。完成即折叠;审批/撤销内联到对应 action 行。 */
 
@@ -12,6 +12,8 @@ export interface ActionRow {
   summary?: string; // 关键参数摘要(如查询词 / 文件名)
   riskLevel?: string;
   error?: string;
+  /** 工具结果文本(可查看工具);存在则该行显示"查看",点开到 artifact 面板 */
+  resultBody?: string;
 }
 
 export interface StepGroup {
@@ -28,6 +30,8 @@ export interface StepTraceProps {
   /** 已撤销的 actionId 集合 */
   revertedIds: Set<string>;
   onUndo: () => void;
+  /** 点击"查看":把该动作的结果文本重开到 artifact 面板 */
+  onView: (artifact: { id: string; title: string; body: string }) => void;
 }
 
 /** 工具名 → 中文动词(折叠摘要 + 行内展示用) */
@@ -44,7 +48,9 @@ const TOOL_LABELS: Record<string, string> = {
   remember: "记忆",
   update_memory: "更新记忆",
   forget_memory: "遗忘",
-  search_memory: "查记忆"
+  search_memory: "查记忆",
+  web_search: "网页搜索",
+  web_fetch: "抓取网页"
 };
 const verbOf = (tool: string): string => TOOL_LABELS[tool] ?? tool;
 
@@ -55,7 +61,7 @@ function StatusIcon({ status }: { status: ActionRow["status"] }): JSX.Element {
   return <AlertCircle size={13} className="shrink-0 text-rose-500" />;
 }
 
-export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo }: StepTraceProps): JSX.Element {
+export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, onView }: StepTraceProps): JSX.Element {
   const { actions } = group;
   const active = actions.some((a) => a.status === "running" || a.status === "awaiting");
   const failed = actions.some((a) => a.status === "failed");
@@ -98,6 +104,7 @@ export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo }:
               undoable={a.id === undoableId}
               reverted={revertedIds.has(a.id)}
               onUndo={onUndo}
+              onView={onView}
             />
           ))}
         </div>
@@ -111,14 +118,19 @@ function ActionLine({
   onApprove,
   undoable,
   reverted,
-  onUndo
+  onUndo,
+  onView
 }: {
   a: ActionRow;
   onApprove: (id: string, approved: boolean) => void;
   undoable: boolean;
   reverted: boolean;
   onUndo: () => void;
+  onView: (artifact: { id: string; title: string; body: string }) => void;
 }): JSX.Element {
+  const viewable = a.status === "done" && !!a.resultBody;
+  const view = (): void =>
+    onView({ id: a.id, title: `${verbOf(a.tool)}${a.summary ? " · " + a.summary : ""}`, body: a.resultBody ?? "" });
   return (
     <div className="text-[12.5px]">
       <div className="flex items-center gap-2">
@@ -160,6 +172,15 @@ function ActionLine({
             >
               <Undo2 size={12} />
               撤销
+            </button>
+          ) : viewable ? (
+            <button
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              onClick={view}
+              title="查看结果"
+            >
+              <Eye size={12} />
+              查看
             </button>
           ) : null}
         </span>

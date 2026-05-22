@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp } from "lucide-react";
+import { ArrowUp, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { StepTrace, type ActionRow, type StepGroup } from "./StepTrace";
 import { useShell } from "../shell/store";
@@ -41,7 +41,11 @@ function argSummary(tool: string, args: unknown): string {
       out = s("reason");
       break;
     case "search_memory":
+    case "web_search":
       out = s("query");
+      break;
+    case "web_fetch":
+      out = s("url");
       break;
     default:
       out = (Object.values(a).find((v) => typeof v === "string") as string) ?? "";
@@ -51,12 +55,14 @@ function argSummary(tool: string, args: unknown): string {
 
 /** 会话面板:消息流 + 内联执行轨迹(step,审批/撤销内联到对应 action 行) */
 export function ChatPane(): JSX.Element {
-  const { activeSessionId, ensureSession } = useShell();
+  const { activeSessionId, ensureSession, openArtifact } = useShell();
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [journal, setJournal] = useState<JournalRow[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 标记:本次 activeSessionId 变化是「为发送而新建会话」,items 已乐观填充,勿回盘清空
+  const sentIntoNewSession = useRef(false);
 
   // 撤销态:已撤销集合 + 当前可撤销(LIFO 栈顶)的 actionId
   const revertedIds = new Set(journal.filter((e) => e.reverted).map((e) => e.actionId));
@@ -66,6 +72,11 @@ export function ChatPane(): JSX.Element {
   useEffect(() => {
     if (!activeSessionId) {
       setItems([]);
+      return;
+    }
+    // 发送时刚创建的会话:磁盘还没 transcript,重载会清掉乐观消息与流式内容,跳过这一次
+    if (sentIntoNewSession.current) {
+      sentIntoNewSession.current = false;
       return;
     }
     void window.pa.session.open(activeSessionId).then((loaded) => setItems(loaded as TimelineItem[]));
@@ -124,6 +135,13 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
+  // 可查看工具的结果文本(live)→ 回填到对应 action,供"查看"按钮
+  useEffect(() => {
+    return window.pa.step.onResult((res) => {
+      setItems((prev) => patchAction(prev, res.actionId, { resultBody: res.body }));
+    });
+  }, []);
+
   // journal(撤销态)
   useEffect(() => {
     void window.pa.reversibility.list().then(setJournal);
@@ -144,6 +162,8 @@ export function ChatPane(): JSX.Element {
   const send = (): void => {
     const text = input.trim();
     if (!text || streaming) return;
+    // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
+    if (!activeSessionId) sentIntoNewSession.current = true;
     setItems((prev) => [
       ...prev,
       { kind: "msg", id: crypto.randomUUID(), role: "user", content: text },
@@ -152,6 +172,10 @@ export function ChatPane(): JSX.Element {
     setInput("");
     setStreaming(true);
     void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text));
+  };
+
+  const stop = (): void => {
+    if (activeSessionId) window.pa.chat.stop(activeSessionId);
   };
 
   const empty = items.length === 0;
@@ -177,6 +201,7 @@ export function ChatPane(): JSX.Element {
                 undoableId={undoableId}
                 revertedIds={revertedIds}
                 onUndo={() => void window.pa.reversibility.undoLast()}
+                onView={(art) => openArtifact({ id: art.id, kind: "text", title: art.title, body: art.body })}
               />
             ) : (
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -218,14 +243,25 @@ export function ChatPane(): JSX.Element {
                 }
               }}
             />
-            <button
-              className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500 text-white transition hover:bg-emerald-600 disabled:opacity-30"
-              onClick={send}
-              disabled={streaming || input.trim() === ""}
-              aria-label="发送"
-            >
-              <ArrowUp size={16} strokeWidth={2.5} />
-            </button>
+            {streaming ? (
+              <button
+                className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-700 text-white transition hover:bg-slate-800 dark:bg-slate-600 dark:hover:bg-slate-500"
+                onClick={stop}
+                aria-label="停止"
+                title="停止"
+              >
+                <Square size={14} strokeWidth={2.5} className="fill-current" />
+              </button>
+            ) : (
+              <button
+                className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500 text-white transition hover:bg-emerald-600 disabled:opacity-30"
+                onClick={send}
+                disabled={input.trim() === ""}
+                aria-label="发送"
+              >
+                <ArrowUp size={16} strokeWidth={2.5} />
+              </button>
+            )}
           </div>
         </div>
       </div>

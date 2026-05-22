@@ -26,4 +26,5 @@ export interface BatchState {
 /** 右侧 artifact 面板内容:一次一个 */
 export type ArtifactContent =
   | { id: string; kind: "batch"; title: string; batch: BatchState }
-  | { id: string; kind: "text"; title: string; body: string };
+  | { id: string; kind: "text"; title: string; body: string }
+  | { id: string; kind: "browser"; title: string };

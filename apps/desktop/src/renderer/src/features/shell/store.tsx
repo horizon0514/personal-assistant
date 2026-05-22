@@ -82,6 +82,13 @@ export function ShellProvider({ children }: { children: ReactNode }): JSX.Elemen
     });
   }, []);
 
+  // 内置浏览器调研 → 自动弹出「浏览器」artifact(面板内挂 <webview>)
+  useEffect(() => {
+    return window.pa.browser.onShow(() => {
+      setArtifact((cur) => (cur?.kind === "browser" ? cur : { id: "browser", kind: "browser", title: "调研浏览器" }));
+    });
+  }, []);
+
   const value: ShellState = {
     workspaces,
     activeWorkspaceId,

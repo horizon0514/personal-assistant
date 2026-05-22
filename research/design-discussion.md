@@ -291,17 +291,41 @@ MemoryItem {
 | 设置·workspace | 自选 wsId,记忆 IPC 按 wsId 参数化(不跟随主窗) |
 | 主题 | 浅/深/跟随系统(默认跟随),nativeTheme.themeSource,全局 settings.json |
 | 设置窗行为 | 单实例/非模态/⌘,/原生标题栏/固定 720×520 |
-| 联网 | 无头浏览器(登录态);公开调研搜索 API 待定 |
-| 浏览器 profile | App 内置专用 profile(本地持久登录) |
+| 联网 / 调研 | 驱动 Electron 自带 Chromium(可见,非 headless);**不用搜索 API**、**不接管用户 Chrome**(见下「内置浏览器调研」节) |
+| 浏览器 profile | App 内置专用 partition(`persist:research`),本地持久登录 |
 | 交互形态 | Chat + 结构化计划 / 工作区面板 |
 | 目标用户 | 知识工作者 / 白领(非开发者) |
 | 数据层级 | workspace → session → step |
 | workspace 定义 | 逻辑命名空间(记忆+偏好+会话+信任),不绑目录 |
 | 布局 | 四栏:session列表 / 对话 / artifact(按需);左下角 ws 切换+设置 |
 | step 呈现 | 并入对话流(行内可折叠块),取消独立列表 |
-| 审批位置 | 输入框下方常驻横幅 |
+| 审批位置 | 内联到对应 action 行(横幅方案作废) |
 | artifact | 默认折叠,一次一个,批量 diff 自动弹出 |
 | 记忆/偏好 | 收进 workspace 设置 |
 | 会话恢复 | 完整恢复(agent 带记忆接着聊,pi 原生支持) |
 | 会话持久化 | infra WorkspaceStore+SessionStore;transcript JSON 单一事实源(JSONL 方案作废) |
 | 实施顺序 | 先前端骨架(内存态)→ 后补持久化与迁移 |
+
+---
+
+## 内置浏览器调研:驱动自带 Chromium(2026-05-22 追加)
+
+WebResearch 不走搜索 API,改为驱动浏览器。架构岔路对照了 OpenClacky 决策 7(接管用户 Chrome):
+
+- **关键区别**:OpenClacky 是 Ruby CLI,自己没浏览器,所以接管用户 Chrome 几乎是拿到"可见+登录态+真浏览器"的唯一办法。**我们是 Electron,本身就是 Chromium**,接管用户 Chrome 的核心动因不成立。
+- **决策:走 B,驱动 Electron 自带 Chromium。** 可见(贴合决策 7 的信任诉求)、非 headless、`partition:"persist:research"` 持久登录态、无 API、无外部 daemon、无 `--remote-debugging-port` 开箱摩擦。代价是用户日常浏览器的现成登录不自动复用——但助理拥有独立、显式授权的浏览器身份反而更干净。
+- **形态(2026-05-22 定,踩坑后):嵌入 ArtifactPanel,用渲染层的 `<webview>` DOM 元素,不开独立弹窗。** `web_search`/`web_fetch` 实时在面板里浏览(用户看着 agent 翻页,决策 7 透明性)。
+  - 主进程通过 `app.on("web-contents-created")` 拿到 webview 的 webContents 驱动导航/抓取;头部 URL/加载态由渲染层监听 webview DOM 事件。
+  - **弃用 WebContentsView 覆盖层**:macOS + BrowserWindow 下它被主页面合成盖住(z-order 无解),改 BaseWindow 又导致应用异常退出,还有首帧不绘制的时序坑。`<webview>` 在 DOM 里显示天然可靠,是 Electron 面板内嵌浏览器的稳妥做法(代价:webviewTag 已 deprecated 但当前可用)。
+- **不选 A(接管用户 Chrome)**:需 remote-debugging 配置 + 外部 chrome-devtools-mcp daemon + 劫持用户日常浏览器,与"开箱即用"冲突。
+
+> ⚠️ 这块在 macOS + Electron 上踩了一长串坑(z-order、绘制时序、BaseWindow 崩溃等),完整实录见 [`browser-embedding-pitfalls.md`](browser-embedding-pitfalls.md)。**改浏览器前必读。**
+
+实现要点:
+- 分层:`cap-browser` 只定义 `BrowserController` 接口 + 工具 schema(保持 electron-free);Electron 驱动放 `apps/desktop/src/main/browser-manager.ts`,组合根注入。
+- 工具粒度(决策 4):起步 `web_search` + `web_fetch` 两个高层语义工具,不暴露 click/scroll/CDP。
+- 搜索抓 SERP(脆),起步用 DuckDuckGo / Bing,避开 Google 反爬。
+- 登录态:遇登录墙时让用户在可见视图登一次,cookie 走 persist partition 留存。
+- 实例首次调用时创建、跨多次 tool call 保活。
+
+详见 [`status-and-roadmap.md`](status-and-roadmap.md) 阶段 B / 记忆 `browser-architecture`。

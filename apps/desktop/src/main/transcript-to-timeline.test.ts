@@ -48,6 +48,32 @@ describe("transcriptToTimeline", () => {
     });
   });
 
+  it("可查看工具的成功结果 → 回填 resultBody(供重开会话的「查看」)", () => {
+    const out = transcriptToTimeline(
+      [
+        { role: "user", content: "读文件" },
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read_file" }] },
+        { role: "toolResult", toolCallId: "t1", toolName: "read_file", isError: false, content: [{ type: "text", text: "文件正文" }] }
+      ],
+      capabilityOf
+    );
+    const step = out.find((i) => i.kind === "step");
+    expect(step).toMatchObject({ actions: [{ id: "t1", tool: "read_file", status: "done", resultBody: "文件正文" }] });
+  });
+
+  it("非可查看工具(如 remember)不回填 resultBody", () => {
+    const out = transcriptToTimeline(
+      [
+        { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "remember" }] },
+        { role: "toolResult", toolCallId: "t1", toolName: "remember", isError: false, content: [{ type: "text", text: "已记住" }] }
+      ],
+      capabilityOf
+    );
+    const step = out.find((i) => i.kind === "step");
+    const action = step?.kind === "step" ? step.actions[0] : undefined;
+    expect(action?.resultBody).toBeUndefined();
+  });
+
   it("非数组(新会话无 transcript)→ 空", () => {
     expect(transcriptToTimeline(undefined, capabilityOf)).toEqual([]);
   });

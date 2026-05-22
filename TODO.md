@@ -22,19 +22,22 @@
 
 ## 交互改版:Workspace + 三栏布局 + Step 内联(决策见 research/design-discussion.md)
 
-### 阶段 1 · 前端交互骨架(内存态,先验证手感)
+### 阶段 1 · 前端交互骨架(已完成,对账于 2026-05-22)
 
-- [ ] **四栏外壳**:`App.tsx` 改为 `[SessionList] [ChatPane] [ArtifactPanel?]`,移除旧 50/50 布局。
-- [ ] **SessionList**:`features/session/SessionList.tsx`,当前 workspace 的会话列表,可折叠。
-- [ ] **WorkspaceSwitcher**:`features/session/WorkspaceSwitcher.tsx`,左下角弹出式切换器 + 设置入口。
-- [ ] **红绿灯留白**:`pl-20` 从标题栏移到 session 栏顶。
-- [ ] **step 内联**:Action 状态/工具调用/撤销从右侧面板搬进 `ChatPane` 行内可折叠块(按 stepId 归组到对应 assistant turn)。
-- [ ] **ApprovalBanner**:输入框下方常驻横幅,接 `approval.onRequest`。
-- [ ] **退役 WorkspacePanel**:删除 `features/workspace/WorkspacePanel.tsx`,子组件视复用迁移到 conversation / artifact。
-- [ ] **ArtifactPanel**:`features/artifact/ArtifactPanel.tsx`,默认折叠、一次一个、可从来源块重开。
-- [ ] **批量 diff 自动弹出**:`batch.onRequest` → 自动展开 ArtifactPanel 显示 `BatchPreview`,与审批横幅"查看"联动。
-- [ ] **Workspace mock**:mock 1~2 个 workspace,切换时换 session 列表。
-- [ ] **设置面板**:把 `MemoryList` 从主界面移入 workspace 设置。
+> 实际实现进度领先于本清单,核对代码后统一勾选;两条按更优方案落地,见备注。
+
+- [x] **四栏外壳**:`App.tsx` 三栏 `[SessionList] [ChatPane] [ArtifactPanel?]`,旧 50/50 已移除。
+- [x] **SessionList**:`features/session/SessionList.tsx`,当前 workspace 会话列表,可折叠。
+- [x] **WorkspaceSwitcher**:`features/session/WorkspaceSwitcher.tsx`,左下角弹出式切换器 + 设置入口。
+- [x] **红绿灯留白**:折叠态 `pl-[78px]` 让出 macOS 红绿灯(`App.tsx`)。
+- [x] **step 内联**:`StepTrace` 按 stepId 归组内联进 `ChatPane`(`upsertAction`/`patchAction`),审批/撤销内联到对应 action 行。
+- [x] **审批 UI(改为内联,取代 ApprovalBanner)**:未做"输入框下常驻横幅";`approval.onRequest` → 把对应 action 切 `awaiting` 态,同意/拒绝按钮内联在该 action 行。更贴合 step 内联,横幅方案作废。
+- [x] **退役 WorkspacePanel**:`features/workspace/` 已不存在。
+- [x] **ArtifactPanel**:`features/artifact/ArtifactPanel.tsx`,默认折叠(无内容返回 null)、一次一个。
+- [x] **来源块重开**(2026-05-22):可查看工具(read_file/extract_document/list_dir/find_files/grep_files)的结果文本经新 `step:result` 通道(live)/ `transcriptToTimeline` 回填(重开会话)挂到 step 行;`StepTrace` 完成行显示「查看」→ `openArtifact({kind:"text"})` 在右侧面板展示。打通了此前无调用方的 `openArtifact`。
+- [x] **批量 diff 自动弹出**:`shell/store.tsx` 订阅 `batch.onRequest` → 自动开 ArtifactPanel 显示 `BatchView`(全部同意/拒绝)。
+- [x] **Workspace(改为真实 IPC,取代 mock)**:阶段 2 已落地 `WorkspaceStore` + IPC,无需 mock。
+- [x] **设置面板**:`features/settings/SettingsApp.tsx` 独立设置窗,`MemoryList` 移入 workspace 设置。
 
 ### 阶段 2 · 数据层与迁移
 
@@ -55,8 +58,8 @@
 - [x] **workspace 删除 + 二次确认**:`WorkspaceStore.remove`(级联清子树、拒删最后一个);切换器内联"删除「X」?确认/取消";删当前自动切到剩余。
 - [x] **updatedAt 单调递增**:`SessionStore.tick()` 修同毫秒排序不确定。
 - [ ] **未配置 key 引导**:暂不做 —— 默认内置 LLM 后端,未来做登录(决策 2026-05-21)。
-- [ ] **已归档会话查看/恢复 UI**:后端 `listArchived` + `setArchived(false)` 就绪,缺入口(如设置里"已归档"列表)。
-- [ ] **BYO key 多 provider**:当前 UI 只管当前 provider 的 key,KeyStore 已按 provider 索引。
+- [x] **已归档会话查看/恢复 UI**(2026-05-22):补全 facade `listArchivedSessions`/`unarchiveSession` + IPC `session:listArchived`/`session:unarchive` + preload;`ArchivedSessions.tsx` 挂在 SessionList 底部(可展开「已归档 (N)」,空则不显示,每行恢复按钮);恢复广播 `session:changed` 刷新活跃列表。
+- [ ] ~~**BYO key 多 provider**~~:**不做**(2026-05-22)——专注 deepseek,未来走"内置 + 注册登录开箱即用",非多 provider。KeyStore 仍按 provider 索引备用。
 
 ## 领域模型待细化(来自 research/domain-model.md 第 5 节)
 
@@ -88,6 +91,7 @@
 
 ## Agent harness 行为(自建 harness 时打磨)
 
+- [ ] **空闲压缩(暂缓,先做交互+功能)**:pi 现在只在快撑满时被动压缩(`shouldCompact` = `contextTokens > contextWindow - 16384`),且压缩走独立 summarization call(命中 0%)。文章决策 5 的优化是「用户停手/失焦时趁 cache 还热主动压」,避免长会话 TTL 过期后整段 history 全量 cold。**决策(2026-05-22):暂不做,先把交互和功能做扎实。** 启动前先确认 `pi-agent-core` 是否暴露手动 `compact()` 入口。背景见 [`research/prompt-cache-and-compaction.md`](research/prompt-cache-and-compaction.md) §2/§5。
 - [ ] **完成前强制自验证**:破坏性/变更操作后,harness 层加校验关卡,完成任务前强制跑一次只读核实(list_dir/read_file),而非仅靠系统提示引导。目前是 prompt 层软约束,模型偶尔会偷懒。
 - [ ] **工具能力兜底**:能力缺口会让 agent 兜圈(如曾经的"无法建目录")。考虑受限 shell 工具(高风险强制审批)作为兜底。
 

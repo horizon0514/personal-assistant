@@ -20,6 +20,7 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "^0.75.4",
     "@earendil-works/pi-ai": "^0.75.4",
+    "@pa/cap-browser": "workspace:*",
     "@pa/cap-document": "workspace:*",
     "@pa/cap-filesystem": "workspace:*",
     "@pa/ctx-memory": "workspace:*",
