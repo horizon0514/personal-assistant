@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <title>Akari 灯 — 去终端化的本地电脑助理</title>
+    <meta
+      name="description"
+      content="Akari(灯)是面向知识工作者的本地电脑助理:用自然语言操作文件、网页与文档,本地运行、登录态闭网访问、个人记忆。建议-审批、可逆撤销,敢用。"
+    />
+    <meta property="og:title" content="Akari 灯 — 去终端化的本地电脑助理" />
+    <meta property="og:description" content="本地操作 + 登录态闭网访问 + 个人记忆 —— 不是又一个面向开发者的 CLI agent。" />
+    <meta property="og:type" content="website" />
+  </head>
+  <body>
+    <!-- ── 顶栏 ── -->
+    <header class="fixed inset-x-0 top-0 z-30 backdrop-blur-md bg-ink-800/70 border-b border-white/5">
+      <nav class="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <a href="#" class="flex items-center gap-2.5">
+          <img src="/icon.svg" alt="Akari" class="h-8 w-8 rounded-lg" />
+          <span class="text-lg font-semibold tracking-tight text-stone-100">Akari<span class="ml-1.5 text-ember-500">灯</span></span>
+        </a>
+        <div class="flex items-center gap-6 text-sm text-stone-400">
+          <a href="#features" class="hidden hover:text-stone-100 sm:inline">特性</a>
+          <a href="#capabilities" class="hidden hover:text-stone-100 sm:inline">能力</a>
+          <a href="https://github.com/horizon0514/personal-assistant" class="hover:text-stone-100">GitHub</a>
+        </div>
+      </nav>
+    </header>
+
+    <!-- ── Hero ── -->
+    <section class="relative overflow-hidden px-6 pt-40 pb-28 text-center">
+      <div class="hero-glow pointer-events-none absolute left-1/2 top-44 -z-10 h-[640px] w-[640px] -translate-x-1/2"></div>
+      <img src="/icon.svg" alt="Akari 图标" class="mx-auto mb-8 h-28 w-28 rounded-3xl shadow-glow" />
+      <h1 class="mx-auto max-w-3xl text-balance text-5xl font-bold leading-tight tracking-tight text-stone-50 sm:text-6xl">
+        像点一盏灯一样<br class="hidden sm:block" />使唤你的电脑
+      </h1>
+      <p class="mx-auto mt-6 max-w-xl text-lg leading-relaxed text-stone-400">
+        Akari（灯）是面向知识工作者的<strong class="text-stone-200">去终端化本地电脑助理</strong>。
+        用一句话让它替你操作文件、网页与文档——本地运行，登录态闭网访问，带个人记忆。
+      </p>
+
+      <!-- 下载区(由 src/main.ts 按系统填充) -->
+      <div class="mt-10 flex flex-col items-center gap-3">
+        <a
+          id="primary-dl"
+          href="https://github.com/horizon0514/personal-assistant/releases/latest"
+          class="group inline-flex items-center gap-2 rounded-full bg-ember-500 px-7 py-3.5 text-base font-semibold text-ink-900 shadow-glow transition hover:bg-ember-100"
+        >
+          <span id="primary-dl-label">下载 Akari</span>
+        </a>
+        <div id="alt-dl" class="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-stone-500"></div>
+        <p id="dl-version" class="text-xs text-stone-600"></p>
+      </div>
+    </section>
+
+    <!-- ── 定位金句 ── -->
+    <section class="px-6 py-10">
+      <p class="mx-auto max-w-3xl text-balance text-center text-2xl font-medium leading-snug text-stone-300">
+        本地操作 ＋ 登录态闭网访问 ＋ 个人记忆<br />
+        <span class="text-stone-500">—— 不是又一个面向开发者的 CLI agent。</span>
+      </p>
+    </section>
+
+    <!-- ── 核心特性(核心域)── -->
+    <section id="features" class="mx-auto max-w-5xl px-6 py-20">
+      <h2 class="mb-3 text-center text-sm font-semibold uppercase tracking-widest text-ember-500">为什么敢用</h2>
+      <p class="mx-auto mb-14 max-w-xl text-center text-3xl font-bold tracking-tight text-stone-100">
+        替你动手，但每一步都在你掌控里
+      </p>
+      <div class="grid gap-6 sm:grid-cols-3">
+        <div class="rounded-2xl border border-white/5 bg-ink-700/40 p-7">
+          <div class="mb-4 text-2xl">🛡️</div>
+          <h3 class="mb-2 text-lg font-semibold text-stone-100">建议-审批</h3>
+          <p class="text-sm leading-relaxed text-stone-400">动作按风险分级，敏感操作先征得你同意再执行。权限可设常驻规则，不被反复打扰。</p>
+        </div>
+        <div class="rounded-2xl border border-white/5 bg-ink-700/40 p-7">
+          <div class="mb-4 text-2xl">↩️</div>
+          <h3 class="mb-2 text-lg font-semibold text-stone-100">可逆撤销</h3>
+          <p class="text-sm leading-relaxed text-stone-400">破坏性操作有追加式日志，文件改动可预览 diff、可一键回滚。做错了，能退回去。</p>
+        </div>
+        <div class="rounded-2xl border border-white/5 bg-ink-700/40 p-7">
+          <div class="mb-4 text-2xl">🧠</div>
+          <h3 class="mb-2 text-lg font-semibold text-stone-100">个人记忆</h3>
+          <p class="text-sm leading-relaxed text-stone-400">记住你的偏好和事实，且<strong class="text-stone-300">可见可编辑</strong>。是你的助理，不是一个黑箱。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 能力(手)── -->
+    <section id="capabilities" class="mx-auto max-w-5xl px-6 py-20">
+      <p class="mx-auto mb-14 max-w-xl text-center text-3xl font-bold tracking-tight text-stone-100">它能替你做什么</p>
+      <div class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="rounded-2xl border border-white/5 bg-ink-700/30 p-6">
+          <h3 class="mb-2 font-semibold text-ember-500">文件</h3>
+          <p class="text-sm leading-relaxed text-stone-400">查找、整理、批量改名与移动，改动可预览可回滚。</p>
+        </div>
+        <div class="rounded-2xl border border-white/5 bg-ink-700/30 p-6">
+          <h3 class="mb-2 font-semibold text-ember-500">网页调研</h3>
+          <p class="text-sm leading-relaxed text-stone-400">替你搜索、抓取、提炼，把散落的信息整理成结论。</p>
+        </div>
+        <div class="rounded-2xl border border-white/5 bg-ink-700/30 p-6">
+          <h3 class="mb-2 font-semibold text-ember-500">浏览器（登录态）</h3>
+          <p class="text-sm leading-relaxed text-stone-400">用你已登录的身份访问闭网内容，凭证存于系统钥匙串。</p>
+        </div>
+        <div class="rounded-2xl border border-white/5 bg-ink-700/30 p-6">
+          <h3 class="mb-2 font-semibold text-ember-500">文档</h3>
+          <p class="text-sm leading-relaxed text-stone-400">读取与处理本地文档（含 PDF），抽取要点为你所用。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 信任信号 ── -->
+    <section class="mx-auto max-w-5xl px-6 py-20">
+      <div class="grid gap-8 rounded-3xl border border-white/5 bg-gradient-to-b from-ink-700/50 to-ink-800 p-10 sm:grid-cols-3">
+        <div class="text-center">
+          <div class="text-2xl font-bold text-stone-100">本地运行</div>
+          <p class="mt-2 text-sm text-stone-400">数据与操作留在你的电脑上。</p>
+        </div>
+        <div class="text-center">
+          <div class="text-2xl font-bold text-stone-100">零后端</div>
+          <p class="mt-2 text-sm text-stone-400">自带模型 Key，客户端直连，不经第三方服务器。</p>
+        </div>
+        <div class="text-center">
+          <div class="text-2xl font-bold text-stone-100">开源</div>
+          <p class="mt-2 text-sm text-stone-400">代码公开，行为可审计。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 底部 CTA ── -->
+    <section class="px-6 py-24 text-center">
+      <h2 class="text-balance text-4xl font-bold tracking-tight text-stone-50">给你的电脑点一盏灯</h2>
+      <a
+        id="footer-dl"
+        href="https://github.com/horizon0514/personal-assistant/releases/latest"
+        class="mt-8 inline-flex items-center gap-2 rounded-full bg-ember-500 px-7 py-3.5 text-base font-semibold text-ink-900 shadow-glow transition hover:bg-ember-100"
+      >
+        立即下载
+      </a>
+    </section>
+
+    <footer class="border-t border-white/5 px-6 py-10 text-center text-sm text-stone-600">
+      <p>Akari 灯 · 面向知识工作者的本地电脑助理</p>
+      <p class="mt-1">
+        <a href="https://github.com/horizon0514/personal-assistant" class="hover:text-stone-400">GitHub</a>
+      </p>
+    </footer>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
