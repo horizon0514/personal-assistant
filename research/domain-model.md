@@ -165,7 +165,7 @@ DDD 的首要动作是**区分核心域 / 支撑域 / 通用域**:把自研精�
 - **聚合根 `BrowserSession`**:`loggedInServices[]`、当前页面状态
   - 实体 `BrowserProfile`:**Electron `<webview>` 的 `persist:research` partition**(持久登录态,助理自己的浏览器身份);**驱动用 `webContents.debugger`(进程内 CDP),非 Playwright**
 - **概念**:`PageAction`(navigate/click/type/scroll/read)、`PageSnapshot`
-- **Tool(实际)**:`web_search`、`web_fetch`、`browser_click`、`browser_type`、`browser_wait`、`browser_scroll`、`browser_screenshot`
+- **Tool(实际)**:`web_search`、`web_fetch`、`read_current_page`、`browser_click`、`browser_type`(带可选 `waitFor`)、`browser_screenshot`(默认隐藏)
 - **领域事件**:`InjectionSuspected`(已落地);页面操作走通用 Task/Action 事件
 - **不变量**:页面内容不可信(InjectionGuard)。改状态动作**不再强制工具级审批**(2026-05-22 决策:可见面板即监督),不可逆对外动作(发送/购买/删除/发帖)靠系统信任边界条款 + guidelines 让模型执行前向用户确认
 

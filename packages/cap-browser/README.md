@@ -7,7 +7,8 @@ BrowserSession Capability —— 内置浏览器调研 + 网页自动化(支撑�
 工具:
 
 - `web_search` / `web_fetch` —— 只读调研(搜索 SERP、抓单页正文)。
-- `browser_click` / `browser_type` —— 网页操作,改页面状态,强制审批。
-- `browser_wait` / `browser_scroll` / `browser_screenshot` —— 只读辅助。
+- `read_current_page` —— 读当前正显示的页面(不导航;用户手动翻页/问「我在看什么」时用)。
+- `browser_click` / `browser_type` —— 网页操作(click/type 带可选 `waitFor`:操作后等某元素出现)。
+- `browser_screenshot` —— 截图(默认隐藏,仅模型支持看图时启用)。
 
 自动化驱动用 Electron `webContents.debugger`(进程内 CDP),**不用 Playwright / `--remote-debugging-port`**——避免暴露本机调试端口,详见 [`research/design-discussion.md`](../../research/design-discussion.md)「内置浏览器调研」节。
