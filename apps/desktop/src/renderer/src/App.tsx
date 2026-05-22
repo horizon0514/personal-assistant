@@ -35,7 +35,7 @@ function Shell(): JSX.Element {
           }
         >
           <button
-            className="no-drag rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
+            className="no-drag rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-slate-800"
             onClick={toggleSidebar}
             title={sidebarCollapsed ? "展开会话列表" : "收起会话列表"}
             aria-label="切换会话列表"

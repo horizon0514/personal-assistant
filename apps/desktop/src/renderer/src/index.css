@@ -22,6 +22,20 @@ body,
     "Helvetica Neue", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* 像原生客户端:默认箭头光标,不在文字/按钮上变 I-beam 或手型 */
+  cursor: default;
+  /* 原生感:UI 文字默认不可选;对话/记忆内容用 .select-text 放开 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 仅可编辑处用文本光标 + 可选(拖拽手柄等自带 cursor 类优先级更高,不受影响) */
+input,
+textarea,
+[contenteditable="true"] {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* 不透明,随系统主题自适应 */

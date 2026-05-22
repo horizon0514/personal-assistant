@@ -46,7 +46,7 @@ export function ApiKeySection(): JSX.Element {
             <Check size={14} /> 已设置 · ····{status.last4}
           </span>
           <button
-            className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"
+            className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-slate-500 ring-1 ring-slate-200 transition hover:bg-slate-50 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800"
             onClick={() => setEditing(true)}
           >
             更换
@@ -85,7 +85,7 @@ export function ApiKeySection(): JSX.Element {
         </div>
       )}
 
-      <p className="mt-2 text-[11.5px] text-slate-400 dark:text-slate-500">
+      <p className="mt-2 text-[11.5px] text-slate-500 dark:text-slate-500">
         本机加密存储(系统钥匙串),不上传、不写入代码。
       </p>
     </div>

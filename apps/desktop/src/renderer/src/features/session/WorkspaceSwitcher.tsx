@@ -46,18 +46,18 @@ export function WorkspaceSwitcher(): JSX.Element {
         <>
           <div className="fixed inset-0 z-10" onClick={closePopover} />
           <div className="absolute bottom-[calc(100%-0.25rem)] left-2 right-2 z-20 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800">
-            <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            <div className="px-3 pb-1 pt-2 text-[11px] font-medium text-slate-500 dark:text-slate-400">
               工作空间
             </div>
             {workspaces.map((w) =>
               confirmDeleteId === w.id ? (
                 <div
                   key={w.id}
-                  className="flex items-center gap-2 px-3 py-2 text-[12.5px] text-rose-600 dark:text-rose-300"
+                  className="flex items-center gap-2 px-3 py-2 text-[13px] text-rose-600 dark:text-rose-300"
                 >
-                  <span className="flex-1 truncate">删除「{w.name}」?会话与记忆一并清除</span>
+                  <span className="min-w-0 flex-1 truncate">删除「{w.name}」?</span>
                   <button
-                    className="shrink-0 rounded px-2 py-0.5 font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/10"
+                    className="shrink-0 rounded-md px-2 py-0.5 text-[13px] font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/10"
                     onClick={() => {
                       deleteWorkspace(w.id);
                       setConfirmDeleteId(null);
@@ -66,7 +66,7 @@ export function WorkspaceSwitcher(): JSX.Element {
                     删除
                   </button>
                   <button
-                    className="shrink-0 rounded px-2 py-0.5 text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                    className="shrink-0 rounded-md px-2 py-0.5 text-[13px] text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
                     onClick={() => setConfirmDeleteId(null)}
                   >
                     取消
@@ -81,15 +81,15 @@ export function WorkspaceSwitcher(): JSX.Element {
                   }
                 >
                   <button
-                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-[13px]"
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-1.5 text-left text-[13px]"
                     onClick={() => {
                       setActiveWorkspace(w.id);
                       setOpen(false);
                     }}
                   >
-                    <WsAvatar name={w.name} />
+                    <WsAvatar name={w.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{w.name}</span>
-                    {w.id === activeWorkspaceId && <Check size={15} className="text-emerald-500" />}
+                    {w.id === activeWorkspaceId && <Check size={14} className="shrink-0 text-emerald-500" />}
                   </button>
                   {canDeleteWorkspace && (
                     <button
@@ -122,30 +122,30 @@ export function WorkspaceSwitcher(): JSX.Element {
             ) : (
               <>
                 <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
                   onClick={() => startMode("create")}
                 >
-                  <Plus size={15} />
+                  <Plus size={14} className="shrink-0 text-slate-400" />
                   新建工作空间
                 </button>
                 <button
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
                   onClick={() => startMode("rename")}
                 >
-                  <Pencil size={15} />
+                  <Pencil size={14} className="shrink-0 text-slate-400" />
                   重命名当前
                 </button>
               </>
             )}
             <div className="my-1 h-px bg-slate-200/70 dark:bg-slate-700" />
             <button
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
               onClick={() => {
                 void window.pa.settings.open();
                 closePopover();
               }}
             >
-              <Settings size={15} />
+              <Settings size={14} className="shrink-0 text-slate-400" />
               设置
             </button>
           </div>
@@ -160,15 +160,21 @@ export function WorkspaceSwitcher(): JSX.Element {
         <span className="flex-1 truncate text-[13px] font-medium text-slate-700 dark:text-slate-200">
           {active?.name ?? "工作空间"}
         </span>
-        <ChevronsUpDown size={15} className="text-slate-400" />
+        <ChevronsUpDown size={15} className="text-slate-500" />
       </button>
     </div>
   );
 }
 
-function WsAvatar({ name }: { name: string }): JSX.Element {
+function WsAvatar({ name, size = "md" }: { name: string; size?: "sm" | "md" }): JSX.Element {
+  const dim = size === "sm" ? "h-[22px] w-[22px] text-[11px]" : "h-7 w-7 text-[13px]";
   return (
-    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-[13px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+    <span
+      className={
+        "flex shrink-0 items-center justify-center rounded-lg bg-emerald-100 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300 " +
+        dim
+      }
+    >
       {name.slice(0, 1)}
     </span>
   );

@@ -36,7 +36,7 @@ export function SessionList(): JSX.Element {
 
       <div className="no-drag px-3 pb-2">
         <button
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2 text-[12.5px] font-medium text-slate-500 transition hover:border-emerald-300 hover:text-emerald-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-emerald-500/50"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2 text-[12.5px] font-medium text-slate-700 transition hover:border-emerald-300 hover:text-emerald-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-emerald-500/50"
           onClick={newSession}
         >
           <SquarePen size={15} strokeWidth={2} />
@@ -46,7 +46,7 @@ export function SessionList(): JSX.Element {
 
       <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2">
         {sessions.length === 0 ? (
-          <p className="px-3 py-4 text-center text-[12px] text-slate-400 dark:text-slate-500">还没有会话</p>
+          <p className="px-3 py-4 text-center text-[12px] text-slate-500 dark:text-slate-500">还没有会话</p>
         ) : (
           sessions.map((s) => (
             <div
@@ -63,7 +63,7 @@ export function SessionList(): JSX.Element {
                   "min-w-0 flex-1 truncate px-3 py-2 text-left text-[13px] " +
                   (s.id === activeSessionId
                     ? "font-medium text-emerald-800 dark:text-emerald-200"
-                    : "text-slate-600 dark:text-slate-300")
+                    : "text-slate-700 dark:text-slate-300")
                 }
                 onClick={() => setActiveSession(s.id)}
                 title={s.title}
@@ -71,7 +71,7 @@ export function SessionList(): JSX.Element {
                 {s.title}
               </button>
               <button
-                className="shrink-0 rounded p-1 text-slate-400 opacity-0 transition hover:text-amber-500 group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-slate-500 opacity-0 transition hover:text-amber-500 group-hover:opacity-100"
                 onClick={() => archiveSession(s.id)}
                 title="归档会话(从列表隐藏,不删除)"
                 aria-label="归档会话"

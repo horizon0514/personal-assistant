@@ -34,7 +34,7 @@ export function MemoryList({ workspaceId }: { workspaceId: string }): JSX.Elemen
   return (
     <div className="space-y-1.5">
       {items.length === 0 ? (
-        <p className="px-1 text-[12px] text-slate-400 dark:text-slate-500">
+        <p className="px-1 text-[12px] text-slate-500 dark:text-slate-500">
           助理会在对话中记住你的偏好与关键事实(纯本地,可见可删)。
         </p>
       ) : (
@@ -52,7 +52,7 @@ export function MemoryList({ workspaceId }: { workspaceId: string }): JSX.Elemen
       {forgotten.length > 0 && (
         <div className="pt-1">
           <button
-            className="flex items-center gap-1 text-[11px] text-slate-400 transition hover:text-slate-500 dark:text-slate-500"
+            className="flex items-center gap-1 text-[11px] text-slate-500 transition hover:text-slate-500 dark:text-slate-500"
             onClick={() => setShowForgotten((s) => !s)}
           >
             <ChevronRight size={12} className={"transition " + (showForgotten ? "rotate-90" : "")} />
@@ -65,12 +65,12 @@ export function MemoryList({ workspaceId }: { workspaceId: string }): JSX.Elemen
                   key={m.id}
                   className="group flex items-start gap-2 rounded-lg bg-slate-50/60 px-2 py-1.5 text-[12px] dark:bg-slate-800/30"
                 >
-                  <span className="min-w-0 flex-1 break-words text-slate-400 line-through dark:text-slate-500">
+                  <span className="min-w-0 flex-1 break-words text-slate-500 line-through dark:text-slate-500">
                     {m.content}
                     {m.forgottenReason && <span className="ml-1 no-underline">· {m.forgottenReason}</span>}
                   </span>
                   <button
-                    className="shrink-0 rounded p-0.5 text-slate-400 opacity-0 transition hover:text-emerald-500 group-hover:opacity-100"
+                    className="shrink-0 rounded p-0.5 text-slate-500 opacity-0 transition hover:text-emerald-500 group-hover:opacity-100"
                     onClick={() => window.pa.memory.restore(workspaceId, m.id)}
                     title="恢复这条记忆"
                   >
@@ -113,9 +113,9 @@ function MemoryRow({
           {m.kind === "preference" ? "偏好" : "事实"}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="break-words text-slate-700 dark:text-slate-200">{m.content}</div>
+          <div className="select-text break-words text-slate-700 dark:text-slate-200">{m.content}</div>
           {m.situation && (
-            <div className="mt-0.5 text-[11px] text-slate-400 dark:text-slate-500">情景:{m.situation}</div>
+            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-500">情景:{m.situation}</div>
           )}
         </div>
         {hasDetail && (
@@ -145,7 +145,7 @@ function MemoryRow({
             </div>
           ))}
           {m.sourceSessionId && (
-            <div className="text-slate-400 dark:text-slate-500">来源会话:{m.sourceSessionId.slice(0, 8)}</div>
+            <div className="text-slate-500 dark:text-slate-500">来源会话:{m.sourceSessionId.slice(0, 8)}</div>
           )}
         </div>
       )}

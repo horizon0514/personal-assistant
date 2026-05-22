@@ -70,7 +70,7 @@ export function SettingsApp(): JSX.Element {
         )}
         {section === "preferences" && (
           <Pane title="偏好" hint={workspaces.find((w) => w.id === wsId)?.name}>
-            <p className="text-[12.5px] text-slate-400 dark:text-slate-500">偏好设置即将上线(按工作空间隔离)。</p>
+            <p className="text-[12.5px] text-slate-500 dark:text-slate-500">偏好设置即将上线(按工作空间隔离)。</p>
           </Pane>
         )}
       </main>
@@ -80,7 +80,7 @@ export function SettingsApp(): JSX.Element {
 
 function Group({ title }: { title: string }): JSX.Element {
   return (
-    <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+    <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-500">
       {title}
     </div>
   );
@@ -103,7 +103,7 @@ function NavItem({
         "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition " +
         (active
           ? "bg-emerald-100/70 font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200"
-          : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800")
+          : "text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800")
       }
       onClick={onClick}
     >
@@ -118,7 +118,7 @@ function Pane({ title, hint, children }: { title: string; hint?: string; childre
     <section className="mx-auto max-w-md">
       <div className="mb-3 flex items-baseline gap-2">
         <h2 className="text-[15px] font-semibold text-slate-700 dark:text-slate-200">{title}</h2>
-        {hint && <span className="text-[11px] text-slate-400 dark:text-slate-500">{hint}</span>}
+        {hint && <span className="text-[11px] text-slate-500 dark:text-slate-500">{hint}</span>}
       </div>
       {children}
     </section>
@@ -134,7 +134,7 @@ function About(): JSX.Element {
     <div className="space-y-1 text-[12.5px] text-slate-500 dark:text-slate-400">
       <div className="text-[14px] font-medium text-slate-700 dark:text-slate-200">个人助理</div>
       <div>版本 {version || "—"}</div>
-      <div className="text-slate-400 dark:text-slate-500">面向知识工作者的本地电脑助理 · 纯本地、隐私不出机</div>
+      <div className="text-slate-500 dark:text-slate-500">面向知识工作者的本地电脑助理 · 纯本地、隐私不出机</div>
     </div>
   );
 }
