@@ -18,6 +18,13 @@ export type ModelHandle = Model<any>;
 export interface ModelSpec {
   readonly provider: string;
   readonly modelId: string;
+  /**
+   * 实验性 vision 覆盖:强行把模型标注为支持图片输入。
+   * pi-ai 仅凭 `model.input.includes("image")` 决定是否把工具返回的截图序列化为 image_url
+   * 发给模型;部分新模型(如 deepseek-v4-flash)实际收图但 pi-ai 内置元数据滞后标成纯文本。
+   * 置 true 时给模型 input 补上 "image",让截图真正送达。模型若不支持,API 会报错(可关掉)。
+   */
+  readonly forceVision?: boolean;
 }
 
 /** BYO key 解析器。默认实现读环境变量;生产用 Keychain 实现替换。 */
@@ -36,7 +43,12 @@ const looseGetModel = getModel as unknown as (provider: string, modelId: string)
 
 export function createModel(spec: ModelSpec): ModelHandle {
   ensureProvidersRegistered();
-  return looseGetModel(spec.provider, spec.modelId);
+  const model = looseGetModel(spec.provider, spec.modelId);
+  if (spec.forceVision && !model.input.includes("image")) {
+    // 浅拷贝后改 input,避免污染 pi-ai 的全局模型表。
+    return { ...model, input: [...model.input, "image"] };
+  }
+  return model;
 }
 
 /** 默认 key 解析:环境变量。占位,后续替换为 Keychain 实现。 */
