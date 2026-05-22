@@ -1,7 +1,7 @@
 /** 应用菜单:macOS 原生范式 —— app 菜单含「设置… ⌘,」,并保留标准 编辑/视图/窗口 角色。 */
 import { app, Menu, type MenuItemConstructorOptions } from "electron";
 
-export function installAppMenu(openSettings: () => void): void {
+export function installAppMenu(openSettings: () => void, checkForUpdates: () => void): void {
   const isMac = process.platform === "darwin";
 
   const template: MenuItemConstructorOptions[] = [
@@ -12,6 +12,7 @@ export function installAppMenu(openSettings: () => void): void {
             submenu: [
               { role: "about" as const },
               { type: "separator" as const },
+              { label: "检查更新…", click: checkForUpdates },
               { label: "设置…", accelerator: "CmdOrCtrl+,", click: openSettings },
               { type: "separator" as const },
               { role: "services" as const },
@@ -34,6 +35,7 @@ export function installAppMenu(openSettings: () => void): void {
           {
             label: "文件",
             submenu: [
+              { label: "检查更新…", click: checkForUpdates },
               { label: "设置…", accelerator: "CmdOrCtrl+,", click: openSettings },
               { type: "separator" as const },
               { role: "quit" as const }

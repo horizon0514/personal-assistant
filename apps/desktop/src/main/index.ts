@@ -3,6 +3,7 @@ import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { registerIpc } from "./ipc";
 import { installAppMenu } from "./menu";
 import { appSettings, type ThemeSource } from "./app-settings";
+import { initAutoUpdate, checkForUpdatesManual } from "./updater";
 
 const BG_LIGHT = "#f3f7f5";
 const BG_DARK = "#0e1411";
@@ -89,8 +90,9 @@ registerIpc();
 
 app.whenReady().then(() => {
   appSettings.apply(); // 应用持久化主题(影响后续窗口底色 + prefers-color-scheme)
-  installAppMenu(openSettings);
+  installAppMenu(openSettings, checkForUpdatesManual);
   createWindow();
+  initAutoUpdate();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
