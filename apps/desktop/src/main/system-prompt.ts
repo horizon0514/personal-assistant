@@ -8,6 +8,7 @@
  * buildSessionContext() 注入到 message 流(pi 的 contextProvider/transformContext)。
  */
 import { homedir, platform, tmpdir, type } from "node:os";
+import { TRUST_BOUNDARY_PROMPT } from "@pa/domain-core";
 
 export interface ToolInfo {
   name: string;
@@ -51,6 +52,8 @@ export function buildSystemPrompt({ tools, guidelines = [] }: BuildSystemPromptO
 - 在任务真正完成并验证之前,不要停下,也不要把活儿丢回给用户。
 - 只有两种情况才停下来找用户:(a) 需要用户决策或提供你拿不到的信息;(b) 需要用户授权某个操作。
 - 工具报错时:读懂错误信息,修正参数后重试,或换一种可行路径——不要直接放弃,也不要绕一大圈。
+
+${TRUST_BOUNDARY_PROMPT}
 
 # 可用工具
 ${toolsList}${guidelinesSection}
