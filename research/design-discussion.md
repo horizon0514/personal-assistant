@@ -331,3 +331,59 @@ WebResearch 不走搜索 API,改为驱动浏览器。架构岔路对照了 OpenC
 - 实例首次调用时创建、跨多次 tool call 保活。
 
 详见 [`status-and-roadmap.md`](status-and-roadmap.md) 阶段 B / 记忆 `browser-architecture`。
+
+---
+
+## 沙箱(代码执行)与 IM 集成:讨论纪要(2026-05-22,**进行中,未定稿**)
+
+> 起因:讨论未来方向时确认「受限 shell / 现场写代码」是必做项(有些能力得让 agent 现场写代码实现)。由此牵出沙箱。本节记录已达成的判断 + 未决分叉,下次接着推。
+
+### 参考:LobsterAI(网易有道)/ OpenClaw —— 几乎同定位的竞品
+Electron+React+TS、个人助理、跨平台(Mac/Win/Linux)、IM 集成为核心、审批 + workspace 边界 + SQLite。其执行模型对我们很有参考:
+- **默认「直接本地执行」+ 权限审批 + 文件操作限定工作目录**(= 能力层路径白名单);**硬沙箱是可选,不是默认**。
+- 可选 **OpenClaw Docker 沙箱**:Gateway 在 host,把 shell/文件执行塞进 Docker(seccomp/AppArmor/no-new-privileges,`/workspace` 挂载)。官方明说「不是完美边界,但能在模型犯傻时实质限制」。
+- 启示:**同定位竞品没把硬沙箱设默认**(Docker 安装负担),「默认软边界 + 硬沙箱可选」是可上线的现实解。
+- IM:**gateway 模式**,每平台一个 connector;手机 IM 发指令 → 触发桌面 agent 会话 → 结果经 IM 回传(IM 当移动/触发通道)。
+
+### 已达成的判断(沙箱)
+1. **威胁模型:主防 A(agent 犯错)+ B(注入驱动恶意操作),不防 C(模型/供应链恶意)**。C 该靠 OS 容器/VM,与开箱即用冲突,不在这层防。
+2. **代码必须本地执行**(主场景是操作用户本地文件,服务端 Docker 够不到本地文件)。
+3. **运行时自带、零安装**:用 Electron 内置的 **Node** 跑 agent 生成的 **JS**,用户什么都不用装。**不支持 Python/任意语言**(打包 Python 太重 / 赌系统有不可靠);长尾再说。
+4. **Docker 不做默认**:它在每个 OS 都要装 Docker Desktop = 又一个白领没有的开发环境。Docker 退化为「有 Docker 的高级用户的可选硬隔离层」。
+5. **跨平台是硬需求**(用户明确要兼容 Windows)→ 否定「Seatbelt 当默认」(Mac-only);跨平台单实现的硬隔离候选是 **Wasm/WASI**(零安装、FS 靠 preopen)。
+6. **采用分层(用户接受)**:
+   - 第 1 层(默认,全平台零安装):**workspace 边界 + 审批**。typed FS 工具完全覆盖。
+   - 第 2 层(可选硬隔离,藏在 `CodeExecutor` 接口后):Docker 优先(竞品已验证),Wasm/原生后补。
+   - 诚实软肋:不开硬沙箱时,代码在 host 跑、只有审批挡——v1 接受此姿态(同 LobsterAI)。
+7. **架构要求(用户强调)**:抽象设计要优雅,**未来加 sandbox 能很简单地插上**,不返工。沿用 `BrowserController` 套路(接口在 cap 包、实现组合根注入)。
+
+### 拟定接口(待定稿)
+```ts
+// cap-code(electron-free):唯一的缝
+export interface ExecRequest {
+  code: string; language: "js"; args?: string[];
+  workspaceDir: string;   // 牢笼根,代码用其下相对路径
+  network?: boolean;      // 默认 false
+  timeoutMs?: number;
+}
+export interface ExecResult { exitCode: number; stdout: string; stderr: string; }
+export interface CodeExecutor {
+  readonly id: string;                   // "host-node" | "docker" | "wasm"
+  readonly enforcement: "soft" | "hard"; // 对隔离强度诚实标注
+  supports(req: ExecRequest): boolean;
+  run(req: ExecRequest, signal?: AbortSignal): Promise<ExecResult>;
+}
+```
+三后端履行同一契约,只在 `enforcement` 不同:HostNode(soft,cwd+审批)/ Docker(hard,`-v -w --network none`)/ Wasm(hard,WASI preopen)。
+
+### ⚠️ 未决分叉(下次从这里继续)
+- **Q5:沙箱里的 agent 代码,允许用原生 Node `fs`/`require`(走 workspaceDir 相对路径约定),还是只给一套受限 API?**
+  - 倾向「原生 Node + 牢笼靠 enforcement 层」:三后端都能履行同一契约(Docker `-v`、Wasm preopen、host cwd+审批),agent 能用打包 npm;受限 API 一旦缺库就卡、且映射不到 Docker。
+  - 但安全姿态上是否要求即便 host 也用受限 API,**用户尚未想清,留待再议**。
+- 其它待议:reversibility 如何处理「代码执行做的任意 FS 变更」(无法自动反转,可能靠执行前快照 workspace 或直接标不可逆+强制审批);`run_code` 的风险等级;授权根目录配置如何被 FS 工具与 executor 共享(单一事实源)。
+
+### IM 集成(初步,待展开)
+- 参考 LobsterAI 的 **gateway 模式**:每平台一个 connector + 路由到本地 agent。
+- 两层价值:(a) 把登录态闭网访问延伸到 IM(读/总结/起草/发);(b) **IM 作触发通道**(手机派活 → 桌面执行 → 回传),不造移动端就拿移动性 + 主动推送。
+- 接入方式分叉(待议):走平台 OpenAPI/bot vs 复用我们已有的登录态浏览器。**飞书/Lark 优先**,且飞书支持 **WebSocket 长连接事件**(无需公网 webhook / 后端即可收消息),对「桌面 app 直连」很友好。
+- 发消息 = 改状态对外动作 → 走信任层确认。
