@@ -94,7 +94,7 @@ importers:
         specifier: ^10.4.20
         version: 10.5.0(postcss@8.5.15)
       electron:
-        specifier: ^33.2.1
+        specifier: 33.4.11
         version: 33.4.11
       electron-builder:
         specifier: ^25.1.8
