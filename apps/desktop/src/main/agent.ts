@@ -36,8 +36,8 @@ import { buildSystemPrompt } from "./system-prompt";
 import { transcriptToTimeline } from "./transcript-to-timeline";
 import { keyStore } from "./key-store";
 
-const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "anthropic";
-const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "claude-sonnet-4-6";
+const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
+const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "deepseek-v4-flash";
 const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
 
 type ChatStreamEvent = { type: "delta"; text: string } | { type: "done" } | { type: "error"; message: string };

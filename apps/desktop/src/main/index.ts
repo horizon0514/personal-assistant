@@ -1,3 +1,4 @@
+import "./app-identity"; // 必须最先执行:设 app 名与 userData 目录(早于任何持久化模块)
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { registerIpc } from "./ipc";
