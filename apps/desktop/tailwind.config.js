@@ -26,12 +26,12 @@ export default {
       },
       fontFamily: {
         sans: [
+          '"Inter Variable"',
           "Inter",
-          "MiSans",
+          '"Noto Sans SC"',
           "-apple-system",
           "BlinkMacSystemFont",
           '"PingFang SC"',
-          '"Source Han Sans SC"',
           '"Hiragino Sans GB"',
           '"Microsoft YaHei"',
           "system-ui",
