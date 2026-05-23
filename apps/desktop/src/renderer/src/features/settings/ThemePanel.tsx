@@ -30,7 +30,7 @@ export function ThemePanel(): JSX.Element {
             className={
               "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] transition " +
               (theme === value
-                ? "bg-white text-stone-800 shadow-sm dark:bg-ink-700 dark:text-stone-100"
+                ? "bg-white text-stone-800 ring-1 ring-black/[0.04] dark:bg-ink-700 dark:text-stone-100 dark:ring-white/5"
                 : "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200")
             }
             onClick={() => pick(value)}

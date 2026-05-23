@@ -41,11 +41,11 @@ export function WorkspaceSwitcher(): JSX.Element {
   };
 
   return (
-    <div className="no-drag relative border-t border-stone-200/70 p-2 dark:border-ink-700">
+    <div className="no-drag relative border-t border-stone-200/70 p-2 dark:border-white/5">
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={closePopover} />
-          <div className="absolute bottom-[calc(100%-0.25rem)] left-2 right-2 z-20 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-ink-600 dark:bg-ink-800">
+          <div className="absolute bottom-[calc(100%-0.25rem)] left-2 right-2 z-20 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-white/10 dark:bg-ink-800">
             <div className="px-3 pb-1 pt-2 text-[11px] font-medium text-stone-500 dark:text-stone-400">
               工作空间
             </div>
@@ -108,7 +108,7 @@ export function WorkspaceSwitcher(): JSX.Element {
               <div className="px-2 py-2">
                 <input
                   autoFocus
-                  className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[13px] text-stone-700 outline-none focus:border-ember-300 dark:border-ink-600 dark:bg-ink-900 dark:text-stone-100"
+                  className="w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[13px] text-stone-700 outline-none focus:border-ember-300 dark:border-white/10 dark:bg-ink-900 dark:text-stone-100"
                   placeholder={mode === "create" ? "新工作空间名称" : "重命名工作空间"}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}

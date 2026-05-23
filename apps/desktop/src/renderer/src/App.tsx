@@ -29,7 +29,7 @@ function Shell(): JSX.Element {
       <div className="flex min-w-0 flex-1 flex-col">
         <div
           className={
-            "drag flex h-12 shrink-0 items-center justify-between border-b border-stone-200/70 pr-4 dark:border-ink-700 " +
+            "drag flex h-12 shrink-0 items-center justify-between border-b border-stone-200/70 pr-4 dark:border-white/5 " +
             // 折叠后顶栏从窗口最左开始,需让出 macOS 红绿灯
             (sidebarCollapsed ? "pl-[78px]" : "pl-3")
           }
@@ -43,7 +43,7 @@ function Shell(): JSX.Element {
             <PanelLeft size={17} strokeWidth={2} />
           </button>
           {model && (
-            <span className="no-drag rounded-md px-2 py-0.5 font-mono text-[10.5px] tracking-tight text-stone-500 ring-1 ring-stone-200 dark:text-stone-400 dark:ring-ink-600">
+            <span className="no-drag rounded-md px-2 py-0.5 font-mono text-[10.5px] tracking-tight text-stone-500 ring-1 ring-stone-200 dark:text-stone-400 dark:ring-white/10">
               {model}
             </span>
           )}

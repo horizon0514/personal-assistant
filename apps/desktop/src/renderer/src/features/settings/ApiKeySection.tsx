@@ -32,7 +32,7 @@ export function ApiKeySection(): JSX.Element {
   const provider = status?.provider ?? "";
 
   return (
-    <div className="rounded-xl border border-stone-200/70 p-3 dark:border-ink-700">
+    <div className="rounded-xl border border-stone-200/70 p-3 dark:border-white/5">
       <div className="mb-2 flex items-center gap-2 text-[12.5px] text-stone-500 dark:text-stone-400">
         <KeyRound size={14} />
         <span>
@@ -46,7 +46,7 @@ export function ApiKeySection(): JSX.Element {
             <Check size={14} /> 已设置 · ····{status.last4}
           </span>
           <button
-            className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-stone-500 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-300 dark:ring-ink-600 dark:hover:bg-ink-800"
+            className="rounded-lg px-2.5 py-1.5 text-[12.5px] text-stone-500 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-300 dark:ring-white/10 dark:hover:bg-ink-800"
             onClick={() => setEditing(true)}
           >
             更换
@@ -63,7 +63,7 @@ export function ApiKeySection(): JSX.Element {
           <input
             type="password"
             autoFocus={editing}
-            className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[12.5px] text-stone-700 outline-none focus:border-ember-300 dark:border-ink-600 dark:bg-ink-900 dark:text-stone-100"
+            className="min-w-0 flex-1 rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[12.5px] text-stone-700 outline-none focus:border-ember-300 dark:border-white/10 dark:bg-ink-900 dark:text-stone-100"
             placeholder={`粘贴你的 ${provider} API Key`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

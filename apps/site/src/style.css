@@ -7,11 +7,11 @@
     scroll-behavior: smooth;
   }
   body {
-    @apply bg-ink-800 text-stone-200 antialiased;
+    @apply bg-ink-950 text-stone-300 antialiased;
   }
 }
 
 /* hero 暖光晕 */
 .hero-glow {
-  background: radial-gradient(closest-side, rgba(255, 207, 134, 0.22), rgba(246, 182, 95, 0.08) 55%, transparent 75%);
+  background: radial-gradient(closest-side, rgba(243, 167, 56, 0.18), rgba(243, 167, 56, 0.06) 55%, transparent 75%);
 }

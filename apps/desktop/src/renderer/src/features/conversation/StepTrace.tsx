@@ -95,7 +95,7 @@ export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, o
       </button>
 
       {open && (
-        <div className="ml-[7px] space-y-1 border-l border-stone-200/70 py-0.5 pl-3 dark:border-ink-600/60">
+        <div className="ml-[7px] space-y-1 border-l border-stone-200/70 py-0.5 pl-3 dark:border-white/5">
           {actions.map((a) => (
             <ActionLine
               key={a.id}

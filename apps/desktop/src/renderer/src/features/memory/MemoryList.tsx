@@ -137,7 +137,7 @@ function MemoryRow({
       </div>
 
       {open && hasDetail && (
-        <div className="ml-7 mt-1.5 space-y-1 border-l border-stone-200 pl-2.5 text-[11px] dark:border-ink-600">
+        <div className="ml-7 mt-1.5 space-y-1 border-l border-stone-200 pl-2.5 text-[11px] dark:border-white/10">
           {m.quote && <div className="text-stone-500 dark:text-stone-400">原话:「{m.quote}」</div>}
           {m.revisions.map((r, i) => (
             <div key={i} className="text-stone-500 dark:text-stone-400">

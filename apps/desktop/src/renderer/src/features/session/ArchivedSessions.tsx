@@ -24,7 +24,7 @@ export function ArchivedSessions(): JSX.Element | null {
   };
 
   return (
-    <div className="no-drag border-t border-stone-200/70 px-2 py-1.5 dark:border-ink-700">
+    <div className="no-drag border-t border-stone-200/70 px-2 py-1.5 dark:border-white/5">
       <button
         className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11.5px] font-medium text-stone-500 transition hover:text-stone-700 dark:text-stone-500 dark:hover:text-stone-300"
         onClick={() => setOpen((o) => !o)}

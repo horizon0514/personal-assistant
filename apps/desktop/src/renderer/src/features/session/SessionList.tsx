@@ -29,7 +29,7 @@ export function SessionList(): JSX.Element {
 
   return (
     <nav
-      className="relative flex shrink-0 flex-col border-r border-stone-200/70 bg-white/40 dark:border-ink-700 dark:bg-ink-900/30"
+      className="relative flex shrink-0 flex-col border-r border-stone-200/70 bg-white/40 dark:border-white/5 dark:bg-ink-900/30"
       style={{ width: sidebarWidth }}
     >
       {/* 顶部留白避开 macOS 红绿灯 */}
@@ -37,7 +37,7 @@ export function SessionList(): JSX.Element {
 
       <div className="no-drag px-3 pb-2">
         <button
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-stone-300 py-2 text-[12.5px] font-medium text-stone-700 transition hover:border-ember-300 hover:text-ember-600 dark:border-ink-600 dark:text-stone-400 dark:hover:border-ember-500/50"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-stone-300 py-2 text-[12.5px] font-medium text-stone-700 transition hover:border-ember-300 hover:text-ember-600 dark:border-white/10 dark:text-stone-400 dark:hover:border-ember-500/50"
           onClick={newSession}
         >
           <SquarePen size={15} strokeWidth={2} />

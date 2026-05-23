@@ -23,7 +23,7 @@ export function SettingsApp(): JSX.Element {
 
   return (
     <div className="flex h-screen w-screen bg-[#f3f7f5] text-stone-800 dark:bg-[#0e1411] dark:text-stone-100">
-      <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-auto border-r border-stone-200/70 px-2 py-3 dark:border-ink-700">
+      <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-auto border-r border-stone-200/70 px-2 py-3 dark:border-white/5">
         <Group title="应用" />
         <NavItem icon={<KeyRound size={15} />} label="模型 / API Key" active={section === "model"} onClick={() => setSection("model")} />
         <NavItem icon={<Palette size={15} />} label="通用" active={section === "general"} onClick={() => setSection("general")} />
@@ -32,7 +32,7 @@ export function SettingsApp(): JSX.Element {
         <Group title="工作空间" />
         <div className="px-2 pb-1">
           <select
-            className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-[12.5px] text-stone-700 outline-none dark:border-ink-600 dark:bg-ink-800 dark:text-stone-200"
+            className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-[12.5px] text-stone-700 outline-none dark:border-white/10 dark:bg-ink-800 dark:text-stone-200"
             value={wsId}
             onChange={(e) => setWsId(e.target.value)}
           >

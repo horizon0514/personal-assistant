@@ -20,8 +20,8 @@ export function ArtifactPanel(): JSX.Element | null {
   };
 
   return (
-    <aside className="flex w-[480px] shrink-0 flex-col border-l border-stone-200/70 bg-white/40 dark:border-ink-700 dark:bg-ink-900/30">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-stone-200/70 px-4 dark:border-ink-700">
+    <aside className="flex w-[480px] shrink-0 flex-col border-l border-stone-200/70 bg-white/40 dark:border-white/5 dark:bg-ink-900/30">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-stone-200/70 px-4 dark:border-white/5">
         <span className="truncate text-[13px] font-medium text-stone-500 dark:text-stone-300">
           {artifact.title}
         </span>
@@ -80,7 +80,7 @@ function BrowserArtifact(): JSX.Element {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="relative shrink-0 border-b border-stone-200/70 dark:border-ink-700">
+      <div className="relative shrink-0 border-b border-stone-200/70 dark:border-white/5">
         <div className="flex items-center gap-1.5 px-3 py-1.5">
           {nav.loading && <Loader2 size={12} className="shrink-0 animate-spin text-ember-500" />}
           <span className="truncate text-[11.5px] text-stone-500 dark:text-stone-400" title={nav.url}>

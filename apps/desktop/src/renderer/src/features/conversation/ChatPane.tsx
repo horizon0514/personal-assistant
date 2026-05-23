@@ -210,10 +210,10 @@ export function ChatPane(): JSX.Element {
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
                   className={
-                    "max-w-[88%] select-text rounded-2xl px-4 py-2.5 text-[13.5px] leading-relaxed " +
+                    "max-w-[88%] select-text rounded-xl px-4 py-2.5 text-[13.5px] leading-relaxed " +
                     (it.role === "user"
-                      ? "whitespace-pre-wrap bg-ember-500 text-ink-900 shadow-sm shadow-ember-500/30 dark:bg-ember-600"
-                      : "bg-white text-stone-700 shadow-sm ring-1 ring-stone-200/80 dark:bg-ink-800 dark:text-stone-100 dark:ring-ink-600")
+                      ? "whitespace-pre-wrap bg-stone-100 text-stone-800 ring-1 ring-black/[0.04] dark:bg-ink-800 dark:text-stone-100 dark:ring-white/10"
+                      : "bg-white text-stone-700 ring-1 ring-stone-200/70 dark:bg-ink-900 dark:text-stone-100 dark:ring-white/5")
                   }
                 >
                   {it.role === "user" ? (
@@ -232,7 +232,7 @@ export function ChatPane(): JSX.Element {
 
       <div className="shrink-0">
         <div className="mx-auto w-full max-w-[760px] px-4 pb-5 pt-2">
-          <div className="no-drag flex items-end gap-2 rounded-2xl border border-stone-200 bg-white p-2 shadow-sm focus-within:border-ember-300 focus-within:ring-2 focus-within:ring-ember-100 dark:border-ink-600 dark:bg-ink-800 dark:focus-within:border-ember-500/60 dark:focus-within:ring-ember-500/20">
+          <div className="no-drag flex items-end gap-2 rounded-xl border border-stone-200 bg-white p-2 transition focus-within:border-ember-400 focus-within:ring-2 focus-within:ring-ember-500/15 dark:border-white/10 dark:bg-ink-900 dark:focus-within:border-ember-500/60 dark:focus-within:ring-ember-500/20">
             <textarea
               rows={1}
               className="max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13.5px] text-stone-700 outline-none placeholder:text-stone-500 dark:text-stone-100 dark:placeholder:text-stone-500"
@@ -248,7 +248,7 @@ export function ChatPane(): JSX.Element {
             />
             {streaming ? (
               <button
-                className="flex h-8 w-8 items-center justify-center rounded-xl bg-stone-700 text-white transition hover:bg-stone-800 dark:bg-ink-700 dark:hover:bg-ink-600"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-700 text-white transition hover:bg-stone-800 dark:bg-ink-700 dark:hover:bg-ink-600"
                 onClick={stop}
                 aria-label="停止"
                 title="停止"
@@ -257,7 +257,7 @@ export function ChatPane(): JSX.Element {
               </button>
             ) : (
               <button
-                className="flex h-8 w-8 items-center justify-center rounded-xl bg-ember-500 text-ink-900 transition hover:bg-ember-600 disabled:opacity-30"
+                className="flex h-8 w-8 items-center justify-center rounded-lg bg-ember-500 text-ink-900 shadow-glow transition hover:bg-ember-400 disabled:opacity-30 disabled:shadow-none"
                 onClick={send}
                 disabled={input.trim() === ""}
                 aria-label="发送"
