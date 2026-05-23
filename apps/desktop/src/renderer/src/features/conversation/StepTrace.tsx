@@ -75,13 +75,13 @@ export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, o
   return (
     <div className="pl-1">
       <button
-        className="flex w-full items-center gap-1.5 py-0.5 text-left text-[11px] text-slate-500 transition hover:text-slate-500 dark:text-slate-500"
+        className="flex w-full items-center gap-1.5 py-0.5 text-left text-[11px] text-stone-500 transition hover:text-stone-500 dark:text-stone-500"
         onClick={() => setOverride(!open)}
       >
         <ChevronRight size={12} className={"shrink-0 transition " + (open ? "rotate-90" : "")} />
         <span className="font-medium">步骤 {group.index}</span>
         {!open && (
-          <span className="truncate text-slate-500 dark:text-slate-500">
+          <span className="truncate text-stone-500 dark:text-stone-500">
             · {summary} ×{actions.length}
           </span>
         )}
@@ -95,7 +95,7 @@ export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, o
       </button>
 
       {open && (
-        <div className="ml-[7px] space-y-1 border-l border-slate-200/70 py-0.5 pl-3 dark:border-slate-700/60">
+        <div className="ml-[7px] space-y-1 border-l border-stone-200/70 py-0.5 pl-3 dark:border-ink-600/60">
           {actions.map((a) => (
             <ActionLine
               key={a.id}
@@ -135,9 +135,9 @@ function ActionLine({
     <div className="text-[12.5px]">
       <div className="flex items-center gap-2">
         <StatusIcon status={a.status} />
-        <span className="shrink-0 font-mono text-[11.5px] text-slate-500 dark:text-slate-400">{a.tool}</span>
+        <span className="shrink-0 font-mono text-[11.5px] text-stone-500 dark:text-stone-400">{a.tool}</span>
         {a.summary && (
-          <span className="min-w-0 flex-1 truncate text-slate-700 dark:text-slate-200" title={a.summary}>
+          <span className="min-w-0 flex-1 truncate text-stone-700 dark:text-stone-200" title={a.summary}>
             {a.summary}
           </span>
         )}
@@ -150,23 +150,23 @@ function ActionLine({
                 </span>
               )}
               <button
-                className="rounded-md bg-emerald-500 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-emerald-600"
+                className="rounded-md bg-ember-500 px-2 py-0.5 text-[11px] font-medium text-ink-900 hover:bg-ember-600"
                 onClick={() => onApprove(a.id, true)}
               >
                 同意
               </button>
               <button
-                className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+                className="rounded-md bg-stone-100 px-2 py-0.5 text-[11px] text-stone-500 hover:bg-stone-200 dark:bg-ink-700 dark:text-stone-200 dark:hover:bg-ink-600"
                 onClick={() => onApprove(a.id, false)}
               >
                 拒绝
               </button>
             </span>
           ) : reverted ? (
-            <span className="text-[11px] text-slate-500 dark:text-slate-500">已撤销</span>
+            <span className="text-[11px] text-stone-500 dark:text-stone-500">已撤销</span>
           ) : undoable ? (
             <button
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-700 dark:text-stone-400 dark:hover:bg-ink-800"
               onClick={onUndo}
               title="撤销这一步(可逆操作)"
             >
@@ -175,7 +175,7 @@ function ActionLine({
             </button>
           ) : viewable ? (
             <button
-              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-700 dark:text-stone-400 dark:hover:bg-ink-800"
               onClick={view}
               title="查看结果"
             >

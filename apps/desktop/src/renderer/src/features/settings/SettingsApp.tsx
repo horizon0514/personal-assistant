@@ -22,8 +22,8 @@ export function SettingsApp(): JSX.Element {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen bg-[#f3f7f5] text-slate-800 dark:bg-[#0e1411] dark:text-slate-100">
-      <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-auto border-r border-slate-200/70 px-2 py-3 dark:border-slate-800">
+    <div className="flex h-screen w-screen bg-[#f3f7f5] text-stone-800 dark:bg-[#0e1411] dark:text-stone-100">
+      <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-auto border-r border-stone-200/70 px-2 py-3 dark:border-ink-700">
         <Group title="应用" />
         <NavItem icon={<KeyRound size={15} />} label="模型 / API Key" active={section === "model"} onClick={() => setSection("model")} />
         <NavItem icon={<Palette size={15} />} label="通用" active={section === "general"} onClick={() => setSection("general")} />
@@ -32,7 +32,7 @@ export function SettingsApp(): JSX.Element {
         <Group title="工作空间" />
         <div className="px-2 pb-1">
           <select
-            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-[12.5px] text-slate-700 outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-[12.5px] text-stone-700 outline-none dark:border-ink-600 dark:bg-ink-800 dark:text-stone-200"
             value={wsId}
             onChange={(e) => setWsId(e.target.value)}
           >
@@ -70,7 +70,7 @@ export function SettingsApp(): JSX.Element {
         )}
         {section === "preferences" && (
           <Pane title="偏好" hint={workspaces.find((w) => w.id === wsId)?.name}>
-            <p className="text-[12.5px] text-slate-500 dark:text-slate-500">偏好设置即将上线(按工作空间隔离)。</p>
+            <p className="text-[12.5px] text-stone-500 dark:text-stone-500">偏好设置即将上线(按工作空间隔离)。</p>
           </Pane>
         )}
       </main>
@@ -80,7 +80,7 @@ export function SettingsApp(): JSX.Element {
 
 function Group({ title }: { title: string }): JSX.Element {
   return (
-    <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-500">
+    <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-500">
       {title}
     </div>
   );
@@ -102,8 +102,8 @@ function NavItem({
       className={
         "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition " +
         (active
-          ? "bg-emerald-100/70 font-medium text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200"
-          : "text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800")
+          ? "bg-ember-100/70 font-medium text-ember-700 dark:bg-ember-500/15 dark:text-ember-100"
+          : "text-stone-500 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-ink-800")
       }
       onClick={onClick}
     >
@@ -117,8 +117,8 @@ function Pane({ title, hint, children }: { title: string; hint?: string; childre
   return (
     <section className="mx-auto max-w-md">
       <div className="mb-3 flex items-baseline gap-2">
-        <h2 className="text-[15px] font-semibold text-slate-700 dark:text-slate-200">{title}</h2>
-        {hint && <span className="text-[11px] text-slate-500 dark:text-slate-500">{hint}</span>}
+        <h2 className="text-[15px] font-semibold text-stone-700 dark:text-stone-200">{title}</h2>
+        {hint && <span className="text-[11px] text-stone-500 dark:text-stone-500">{hint}</span>}
       </div>
       {children}
     </section>
@@ -131,10 +131,10 @@ function About(): JSX.Element {
     void window.pa.appVersion().then(setVersion);
   }, []);
   return (
-    <div className="space-y-1 text-[12.5px] text-slate-500 dark:text-slate-400">
-      <div className="text-[14px] font-medium text-slate-700 dark:text-slate-200">个人助理</div>
+    <div className="space-y-1 text-[12.5px] text-stone-500 dark:text-stone-400">
+      <div className="text-[14px] font-medium text-stone-700 dark:text-stone-200">个人助理</div>
       <div>版本 {version || "—"}</div>
-      <div className="text-slate-500 dark:text-slate-500">面向知识工作者的本地电脑助理 · 纯本地、隐私不出机</div>
+      <div className="text-stone-500 dark:text-stone-500">面向知识工作者的本地电脑助理 · 纯本地、隐私不出机</div>
     </div>
   );
 }

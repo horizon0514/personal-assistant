@@ -4,7 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 让代码块背景由 prose-pre(slate-900)统一控制,hljs 只负责 token 着色 */
+/* 让代码块背景由 prose-pre(ink-900)统一控制,hljs 只负责 token 着色 */
 .hljs {
   background: transparent;
   padding: 0;
@@ -19,7 +19,8 @@ body,
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    "Helvetica Neue", system-ui, sans-serif;
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", system-ui,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* 像原生客户端:默认箭头光标,不在文字/按钮上变 I-beam 或手型 */
@@ -70,15 +71,15 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.25);
+  background: rgba(120, 113, 108, 0.25);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.45);
+  background: rgba(120, 113, 108, 0.45);
 }
 @media (prefers-color-scheme: dark) {
   ::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.22);
+    background: rgba(39, 70, 58, 0.6);
   }
 }
 ::-webkit-scrollbar-track {
