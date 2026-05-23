@@ -1,34 +1,31 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bgA" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#18271f"/>
-      <stop offset="1" stop-color="#0b1210"/>
+      <stop offset="0" stop-color="#1c1f24"/>
+      <stop offset="1" stop-color="#0b0c0e"/>
     </linearGradient>
     <radialGradient id="glowA" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#fff3d2" stop-opacity="0.9"/>
-      <stop offset="0.35" stop-color="#f7c070" stop-opacity="0.5"/>
-      <stop offset="0.7" stop-color="#f0a043" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#f0a043" stop-opacity="0"/>
+      <stop offset="0" stop-color="#ffe9c6" stop-opacity="0.95"/>
+      <stop offset="0.35" stop-color="#f3a738" stop-opacity="0.5"/>
+      <stop offset="0.7" stop-color="#f3a738" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#f3a738" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="inkA" x1="0" y1="0" x2="0.2" y2="1">
-      <stop offset="0" stop-color="#fff3da"/>
-      <stop offset="0.6" stop-color="#fbcb84"/>
-      <stop offset="1" stop-color="#f4ad55"/>
+      <stop offset="0" stop-color="#ffe9c6"/>
+      <stop offset="0.55" stop-color="#f9b443"/>
+      <stop offset="1" stop-color="#e0901f"/>
     </linearGradient>
     <filter id="bloomA" x="-80%" y="-80%" width="260%" height="260%">
       <feGaussianBlur stdDeviation="10"/>
     </filter>
   </defs>
   <rect width="1024" height="1024" rx="228" fill="url(#bgA)"/>
-  <!-- 笔尖处的暖光晕 -->
+  <rect x="3" y="3" width="1018" height="1018" rx="225" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
   <circle cx="476" cy="770" r="360" fill="url(#glowA)"/>
-  <!-- 右长笔(灯身),收尾探进光里 -->
   <path d="M632 298 C698 326 690 422 650 528 C614 628 552 738 476 772"
         fill="none" stroke="url(#inkA)" stroke-width="86" stroke-linecap="round"/>
-  <!-- 左短竖 -->
   <path d="M396 334 C384 412 384 488 392 566"
         fill="none" stroke="url(#inkA)" stroke-width="86" stroke-linecap="round"/>
-  <!-- 笔尖灯火 -->
   <circle cx="476" cy="772" r="58" fill="#fff3d2" filter="url(#bloomA)"/>
   <circle cx="476" cy="770" r="30" fill="#fffaf0"/>
 </svg>
