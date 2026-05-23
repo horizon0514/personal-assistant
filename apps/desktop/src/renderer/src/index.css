@@ -18,11 +18,12 @@ body,
 }
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", system-ui,
-    sans-serif;
+  font-family: "Inter", "MiSans", -apple-system, BlinkMacSystemFont,
+    "PingFang SC", "Source Han Sans SC", "Hiragino Sans GB", "Microsoft YaHei",
+    system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: "cv05", "ss01";
   /* 像原生客户端:默认箭头光标,不在文字/按钮上变 I-beam 或手型 */
   cursor: default;
   /* 原生感:UI 文字默认不可选;对话/记忆内容用 .select-text 放开 */
@@ -49,11 +50,11 @@ textarea,
 
 /* 不透明,随系统主题自适应 */
 body {
-  background: #f3f7f5;
+  background: #fafafa;
 }
 @media (prefers-color-scheme: dark) {
   body {
-    background: #0e1411;
+    background: #0b0c0e;
   }
 }
 
@@ -71,15 +72,18 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(120, 113, 108, 0.25);
+  background: rgba(113, 113, 122, 0.3);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(120, 113, 108, 0.45);
+  background: rgba(113, 113, 122, 0.5);
 }
 @media (prefers-color-scheme: dark) {
   ::-webkit-scrollbar-thumb {
-    background: rgba(39, 70, 58, 0.6);
+    background: rgba(255, 255, 255, 0.12);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
   }
 }
 ::-webkit-scrollbar-track {

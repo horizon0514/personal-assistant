@@ -23,7 +23,7 @@ function Shell(): JSX.Element {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen bg-[#f3f7f5] text-stone-800 dark:bg-[#0e1411] dark:text-stone-100">
+    <div className="flex h-screen w-screen bg-[#fafafa] text-stone-800 dark:bg-[#0b0c0e] dark:text-stone-100">
       {!sidebarCollapsed && <SessionList />}
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -43,7 +43,7 @@ function Shell(): JSX.Element {
             <PanelLeft size={17} strokeWidth={2} />
           </button>
           {model && (
-            <span className="no-drag rounded-full bg-ember-100 px-2.5 py-1 text-[11px] font-medium text-ember-700 dark:bg-ember-500/15 dark:text-ember-300">
+            <span className="no-drag rounded-md px-2 py-0.5 font-mono text-[10.5px] tracking-tight text-stone-500 ring-1 ring-stone-200 dark:text-stone-400 dark:ring-ink-600">
               {model}
             </span>
           )}

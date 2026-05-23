@@ -192,7 +192,7 @@ export function ChatPane(): JSX.Element {
                 alt="Akari"
                 className="mb-4 h-14 w-14 rounded-2xl shadow-glow"
               />
-              <p className="text-sm text-stone-500 dark:text-stone-400">难办的事,先点一盏灯</p>
+              <p className="text-[15px] font-medium text-stone-500 dark:text-stone-400">难办的事,先点一盏灯</p>
             </div>
           )}
           {items.map((it) =>
