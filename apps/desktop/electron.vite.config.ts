@@ -33,6 +33,10 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     build: {
+      // 渲染层 CSP 为 default-src 'self',禁止 data: URI;故关闭小资源内联,
+      // 让 svg/图片一律输出为独立文件(经 'self' 加载)。否则 <4KB 资源会被内联成
+      // data: 而被 CSP 拦截(如空状态的 akari-mark.svg)。
+      assetsInlineLimit: 0,
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/renderer/index.html"),

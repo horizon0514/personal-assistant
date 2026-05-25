@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, Sun, Moon, Monitor } from "lucide-react";
+import type { ThemeSource } from "../../preload";
 import { ShellProvider, useShell } from "./features/shell/store";
 import { SessionList } from "./features/session/SessionList";
 import { ChatPane } from "./features/conversation/ChatPane";
@@ -14,39 +15,56 @@ export function App(): JSX.Element {
   );
 }
 
+/** 顶栏主题切换:浅 → 深 → 跟随系统 循环,弱化模型(不再显示 model 信息)。 */
+const THEME_CYCLE: { value: ThemeSource; Icon: typeof Sun; label: string }[] = [
+  { value: "light", Icon: Sun, label: "浅色" },
+  { value: "dark", Icon: Moon, label: "深色" },
+  { value: "system", Icon: Monitor, label: "跟随系统" }
+];
+
 function Shell(): JSX.Element {
   const { sidebarCollapsed, toggleSidebar } = useShell();
-  const [model, setModel] = useState("");
+  const [theme, setTheme] = useState<ThemeSource>("system");
 
   useEffect(() => {
-    void window.pa.chat.model().then(setModel);
+    void window.pa.settings.getTheme().then(setTheme);
   }, []);
 
+  const current = THEME_CYCLE.find((t) => t.value === theme) ?? THEME_CYCLE[2]!;
+  const cycleTheme = (): void => {
+    const next = THEME_CYCLE[(THEME_CYCLE.findIndex((t) => t.value === theme) + 1) % THEME_CYCLE.length]!;
+    setTheme(next.value);
+    void window.pa.settings.setTheme(next.value);
+  };
+
   return (
-    <div className="flex h-screen w-screen bg-[#f3f7f5] text-slate-800 dark:bg-[#0e1411] dark:text-slate-100">
+    <div className="flex h-screen w-screen bg-[#fafafa] text-stone-800 dark:bg-[#0b0c0e] dark:text-stone-100">
       {!sidebarCollapsed && <SessionList />}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div
           className={
-            "drag flex h-12 shrink-0 items-center justify-between border-b border-slate-200/70 pr-4 dark:border-slate-800 " +
+            "drag flex h-12 shrink-0 items-center justify-between border-b border-stone-200/70 pr-4 dark:border-white/5 " +
             // 折叠后顶栏从窗口最左开始,需让出 macOS 红绿灯
             (sidebarCollapsed ? "pl-[78px]" : "pl-3")
           }
         >
           <button
-            className="no-drag rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-500 dark:hover:bg-slate-800"
+            className="no-drag rounded-lg p-1.5 text-stone-500 transition hover:bg-stone-100 hover:text-stone-500 dark:hover:bg-ink-800"
             onClick={toggleSidebar}
             title={sidebarCollapsed ? "展开会话列表" : "收起会话列表"}
             aria-label="切换会话列表"
           >
             <PanelLeft size={17} strokeWidth={2} />
           </button>
-          {model && (
-            <span className="no-drag rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-              {model}
-            </span>
-          )}
+          <button
+            className="no-drag rounded-lg p-1.5 text-stone-500 transition hover:bg-stone-100 hover:text-stone-500 dark:hover:bg-ink-800"
+            onClick={cycleTheme}
+            title={`主题:${current.label}(点击切换)`}
+            aria-label={`切换主题,当前${current.label}`}
+          >
+            <current.Icon size={16} strokeWidth={2} />
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1">

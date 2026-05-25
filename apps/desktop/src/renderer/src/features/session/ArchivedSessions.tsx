@@ -24,9 +24,9 @@ export function ArchivedSessions(): JSX.Element | null {
   };
 
   return (
-    <div className="no-drag border-t border-slate-200/70 px-2 py-1.5 dark:border-slate-800">
+    <div className="no-drag border-t border-stone-200/70 px-2 py-1.5 dark:border-white/5">
       <button
-        className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11.5px] font-medium text-slate-500 transition hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300"
+        className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-[11.5px] font-medium text-stone-500 transition hover:text-stone-700 dark:text-stone-500 dark:hover:text-stone-300"
         onClick={() => setOpen((o) => !o)}
       >
         <ChevronRight size={12} className={"shrink-0 transition " + (open ? "rotate-90" : "")} />
@@ -38,16 +38,16 @@ export function ArchivedSessions(): JSX.Element | null {
           {archived.map((s) => (
             <div
               key={s.id}
-              className="group flex items-center rounded-lg pr-1 transition hover:bg-slate-100 dark:hover:bg-slate-800"
+              className="group flex items-center rounded-lg pr-1 transition hover:bg-stone-100 dark:hover:bg-ink-800"
             >
               <span
-                className="min-w-0 flex-1 truncate px-3 py-1.5 text-[12.5px] text-slate-500 dark:text-slate-400"
+                className="min-w-0 flex-1 truncate px-3 py-1.5 text-[12.5px] text-stone-500 dark:text-stone-400"
                 title={s.title}
               >
                 {s.title}
               </span>
               <button
-                className="shrink-0 rounded p-1 text-slate-500 opacity-0 transition hover:text-emerald-600 group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-stone-500 opacity-0 transition hover:text-ember-600 group-hover:opacity-100"
                 onClick={() => restore(s.id)}
                 title="恢复会话(重回列表)"
                 aria-label="恢复会话"

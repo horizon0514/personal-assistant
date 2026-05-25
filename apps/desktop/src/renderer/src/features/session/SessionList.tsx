@@ -29,15 +29,19 @@ export function SessionList(): JSX.Element {
 
   return (
     <nav
-      className="relative flex shrink-0 flex-col border-r border-slate-200/70 bg-white/40 dark:border-slate-800 dark:bg-slate-900/30"
+      className="relative flex shrink-0 flex-col border-r border-stone-200/70 bg-white/40 dark:border-white/5 dark:bg-ink-900/30"
       style={{ width: sidebarWidth }}
     >
-      {/* 顶部留白避开 macOS 红绿灯 */}
-      <div className="drag h-12 shrink-0" />
+      {/* 顶部品牌头:drag 区,左 padding 让出 macOS 红绿灯 */}
+      <div className="drag flex h-12 shrink-0 items-center pl-[78px] pr-3">
+        <span className="select-none font-mono text-[15px] font-bold lowercase tracking-[0.16em] text-ember-600 dark:text-ember-400">
+          akari
+        </span>
+      </div>
 
       <div className="no-drag px-3 pb-2">
         <button
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2 text-[12.5px] font-medium text-slate-700 transition hover:border-emerald-300 hover:text-emerald-600 dark:border-slate-700 dark:text-slate-400 dark:hover:border-emerald-500/50"
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-stone-300 py-2 text-[12.5px] font-medium text-stone-700 transition hover:border-ember-300 hover:text-ember-600 dark:border-white/10 dark:text-stone-400 dark:hover:border-ember-500/50"
           onClick={newSession}
         >
           <SquarePen size={15} strokeWidth={2} />
@@ -47,7 +51,7 @@ export function SessionList(): JSX.Element {
 
       <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2">
         {sessions.length === 0 ? (
-          <p className="px-3 py-4 text-center text-[12px] text-slate-500 dark:text-slate-500">还没有会话</p>
+          <p className="px-3 py-4 text-center text-[12px] text-stone-500 dark:text-stone-500">还没有会话</p>
         ) : (
           sessions.map((s) => (
             <div
@@ -55,16 +59,16 @@ export function SessionList(): JSX.Element {
               className={
                 "group flex items-center rounded-lg pr-1 transition " +
                 (s.id === activeSessionId
-                  ? "bg-emerald-100/70 dark:bg-emerald-500/15"
-                  : "hover:bg-slate-100 dark:hover:bg-slate-800")
+                  ? "bg-ember-100/70 dark:bg-ember-500/15"
+                  : "hover:bg-stone-100 dark:hover:bg-ink-800")
               }
             >
               <button
                 className={
                   "min-w-0 flex-1 truncate px-3 py-2 text-left text-[13px] " +
                   (s.id === activeSessionId
-                    ? "font-medium text-emerald-800 dark:text-emerald-200"
-                    : "text-slate-700 dark:text-slate-300")
+                    ? "font-medium text-ember-700 dark:text-ember-100"
+                    : "text-stone-700 dark:text-stone-300")
                 }
                 onClick={() => setActiveSession(s.id)}
                 title={s.title}
@@ -72,7 +76,7 @@ export function SessionList(): JSX.Element {
                 {s.title}
               </button>
               <button
-                className="shrink-0 rounded p-1 text-slate-500 opacity-0 transition hover:text-amber-500 group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-stone-500 opacity-0 transition hover:text-amber-500 group-hover:opacity-100"
                 onClick={() => archiveSession(s.id)}
                 title="归档会话(从列表隐藏,不删除)"
                 aria-label="归档会话"
@@ -97,7 +101,7 @@ export function SessionList(): JSX.Element {
           document.body.style.userSelect = "none";
         }}
       >
-        <div className="mx-auto h-full w-px bg-transparent transition hover:bg-emerald-400/40" />
+        <div className="mx-auto h-full w-px bg-transparent transition hover:bg-ember-300/40" />
       </div>
     </nav>
   );

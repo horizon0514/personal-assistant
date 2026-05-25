@@ -23,15 +23,15 @@ export function ThemePanel(): JSX.Element {
 
   return (
     <Field label="外观">
-      <div className="inline-flex gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800">
+      <div className="inline-flex gap-1 rounded-xl bg-stone-100 p-1 dark:bg-ink-800">
         {OPTIONS.map(({ value, label, Icon }) => (
           <button
             key={value}
             className={
               "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] transition " +
               (theme === value
-                ? "bg-white text-slate-800 shadow-sm dark:bg-slate-700 dark:text-slate-100"
-                : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200")
+                ? "bg-white text-stone-800 ring-1 ring-black/[0.04] dark:bg-ink-700 dark:text-stone-100 dark:ring-white/5"
+                : "text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200")
             }
             onClick={() => pick(value)}
           >
@@ -47,7 +47,7 @@ export function ThemePanel(): JSX.Element {
 function Field({ label, children }: { label: string; children: ReactNode }): JSX.Element {
   return (
     <div className="space-y-1.5">
-      <div className="text-[12px] font-medium text-slate-500 dark:text-slate-400">{label}</div>
+      <div className="text-[12px] font-medium text-stone-500 dark:text-stone-400">{label}</div>
       {children}
     </div>
   );

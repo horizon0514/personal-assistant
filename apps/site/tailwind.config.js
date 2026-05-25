@@ -4,27 +4,30 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 取自 Akari 图标:暗底墨绿 + 暖光琥珀
+        // 暗色精密派:中性近黑画布 + 灯光琥珀强调(与桌面端一致)
         ink: {
-          900: "#0b1210",
-          800: "#0e1411",
-          700: "#16241d",
-          600: "#1d3328"
+          950: "#0b0c0e",
+          900: "#121317",
+          800: "#1a1c21",
+          700: "#23262c",
+          600: "#31353d"
         },
         ember: {
-          50: "#fff3da",
-          100: "#ffcf86",
-          300: "#fbcb84",
-          500: "#f6b65f",
-          600: "#f4ad55",
-          700: "#ef8a3c"
+          50: "#fff5e1",
+          100: "#ffe6bd",
+          300: "#ffcd76",
+          400: "#f9b443",
+          500: "#f3a738",
+          600: "#dd9020",
+          700: "#b06d13"
         }
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'system-ui', 'sans-serif']
+        sans: ['Inter', '"Noto Sans SC"', '-apple-system', 'BlinkMacSystemFont', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+        mono: ['"Geist Mono"', '"JetBrains Mono"', 'ui-monospace', '"SF Mono"', 'monospace']
       },
       boxShadow: {
-        glow: "0 0 80px -10px rgba(246,182,95,0.45)"
+        glow: "0 0 60px -12px rgba(243,167,56,0.40)"
       }
     }
   },
