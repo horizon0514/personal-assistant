@@ -3,5 +3,7 @@
 import "@fontsource-variable/inter";
 import "@fontsource/geist-mono/400.css";
 import "@fontsource/geist-mono/500.css";
+import "@fontsource/geist-mono/600.css";
+import "@fontsource/geist-mono/700.css";
 import "@fontsource/noto-sans-sc/400.css";
 import "@fontsource/noto-sans-sc/500.css";

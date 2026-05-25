@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Brain, Info, KeyRound, Palette, SlidersHorizontal } from "lucide-react";
+import akariMark from "../../assets/akari-mark.svg";
 import type { WorkspaceRecord } from "../../../../preload";
 import { ApiKeySection } from "./ApiKeySection";
 import { ThemePanel } from "./ThemePanel";
@@ -22,7 +23,7 @@ export function SettingsApp(): JSX.Element {
   }, []);
 
   return (
-    <div className="flex h-screen w-screen bg-[#f3f7f5] text-stone-800 dark:bg-[#0e1411] dark:text-stone-100">
+    <div className="flex h-screen w-screen bg-[#fafafa] text-stone-800 dark:bg-[#0b0c0e] dark:text-stone-100">
       <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-auto border-r border-stone-200/70 px-2 py-3 dark:border-white/5">
         <Group title="应用" />
         <NavItem icon={<KeyRound size={15} />} label="模型 / API Key" active={section === "model"} onClick={() => setSection("model")} />
@@ -131,10 +132,20 @@ function About(): JSX.Element {
     void window.pa.appVersion().then(setVersion);
   }, []);
   return (
-    <div className="space-y-1 text-[12.5px] text-stone-500 dark:text-stone-400">
-      <div className="text-[14px] font-medium text-stone-700 dark:text-stone-200">个人助理</div>
-      <div>版本 {version || "—"}</div>
-      <div className="text-stone-500 dark:text-stone-500">面向知识工作者的本地电脑助理 · 纯本地、隐私不出机</div>
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <img src={akariMark} alt="" className="h-11 w-11 rounded-2xl shadow-glow" />
+        <div>
+          <div className="font-mono text-[18px] font-bold lowercase tracking-[0.16em] text-ember-600 dark:text-ember-400">
+            akari
+          </div>
+          <div className="text-[12px] text-stone-500 dark:text-stone-400">版本 {version || "—"}</div>
+        </div>
+      </div>
+      <p className="max-w-md text-[12.5px] leading-relaxed text-stone-500 dark:text-stone-400">
+        面向知识工作者的去终端化本地电脑助理 · 本地运行、登录态闭网访问、个人记忆 · 隐私不出机。
+      </p>
+      <p className="text-[12.5px] font-medium text-ember-500">难办的事,先点一盏灯</p>
     </div>
   );
 }

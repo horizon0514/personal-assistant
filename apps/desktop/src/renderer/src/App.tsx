@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, Sun, Moon, Monitor } from "lucide-react";
+import type { ThemeSource } from "../../preload";
 import { ShellProvider, useShell } from "./features/shell/store";
 import { SessionList } from "./features/session/SessionList";
 import { ChatPane } from "./features/conversation/ChatPane";
@@ -14,13 +15,27 @@ export function App(): JSX.Element {
   );
 }
 
+/** 顶栏主题切换:浅 → 深 → 跟随系统 循环,弱化模型(不再显示 model 信息)。 */
+const THEME_CYCLE: { value: ThemeSource; Icon: typeof Sun; label: string }[] = [
+  { value: "light", Icon: Sun, label: "浅色" },
+  { value: "dark", Icon: Moon, label: "深色" },
+  { value: "system", Icon: Monitor, label: "跟随系统" }
+];
+
 function Shell(): JSX.Element {
   const { sidebarCollapsed, toggleSidebar } = useShell();
-  const [model, setModel] = useState("");
+  const [theme, setTheme] = useState<ThemeSource>("system");
 
   useEffect(() => {
-    void window.pa.chat.model().then(setModel);
+    void window.pa.settings.getTheme().then(setTheme);
   }, []);
+
+  const current = THEME_CYCLE.find((t) => t.value === theme) ?? THEME_CYCLE[2]!;
+  const cycleTheme = (): void => {
+    const next = THEME_CYCLE[(THEME_CYCLE.findIndex((t) => t.value === theme) + 1) % THEME_CYCLE.length]!;
+    setTheme(next.value);
+    void window.pa.settings.setTheme(next.value);
+  };
 
   return (
     <div className="flex h-screen w-screen bg-[#fafafa] text-stone-800 dark:bg-[#0b0c0e] dark:text-stone-100">
@@ -42,11 +57,14 @@ function Shell(): JSX.Element {
           >
             <PanelLeft size={17} strokeWidth={2} />
           </button>
-          {model && (
-            <span className="no-drag rounded-md px-2 py-0.5 font-mono text-[10.5px] tracking-tight text-stone-500 ring-1 ring-stone-200 dark:text-stone-400 dark:ring-white/10">
-              {model}
-            </span>
-          )}
+          <button
+            className="no-drag rounded-lg p-1.5 text-stone-500 transition hover:bg-stone-100 hover:text-stone-500 dark:hover:bg-ink-800"
+            onClick={cycleTheme}
+            title={`主题:${current.label}(点击切换)`}
+            aria-label={`切换主题,当前${current.label}`}
+          >
+            <current.Icon size={16} strokeWidth={2} />
+          </button>
         </div>
 
         <div className="flex min-h-0 flex-1">

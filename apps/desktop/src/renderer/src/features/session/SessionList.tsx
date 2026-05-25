@@ -32,8 +32,12 @@ export function SessionList(): JSX.Element {
       className="relative flex shrink-0 flex-col border-r border-stone-200/70 bg-white/40 dark:border-white/5 dark:bg-ink-900/30"
       style={{ width: sidebarWidth }}
     >
-      {/* 顶部留白避开 macOS 红绿灯 */}
-      <div className="drag h-12 shrink-0" />
+      {/* 顶部品牌头:drag 区,左 padding 让出 macOS 红绿灯 */}
+      <div className="drag flex h-12 shrink-0 items-center pl-[78px] pr-3">
+        <span className="select-none font-mono text-[15px] font-bold lowercase tracking-[0.16em] text-ember-600 dark:text-ember-400">
+          akari
+        </span>
+      </div>
 
       <div className="no-drag px-3 pb-2">
         <button
