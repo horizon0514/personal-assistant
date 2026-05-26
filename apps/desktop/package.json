@@ -7,7 +7,7 @@
   "author": "horizon0514",
   "description": "面向知识工作者的去终端化本地电脑助理",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --watch",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit",
     "preview": "electron-vite preview",
