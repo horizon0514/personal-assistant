@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Brain, Info, KeyRound, Palette, SlidersHorizontal } from "lucide-react";
-import akariMark from "../../assets/akari-mark.svg";
+import { AkariMark } from "../shell/AkariMark";
 import type { WorkspaceRecord } from "../../../../preload";
 import { ApiKeySection } from "./ApiKeySection";
 import { ThemePanel } from "./ThemePanel";
@@ -134,7 +134,7 @@ function About(): JSX.Element {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
-        <img src={akariMark} alt="" className="h-11 w-11 rounded-2xl shadow-glow" />
+        <AkariMark alt="" className="h-11 w-11 rounded-2xl shadow-glow" />
         <div>
           <div className="font-mono text-[18px] font-bold lowercase tracking-[0.16em] text-ember-600 dark:text-ember-400">
             akari

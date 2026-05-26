@@ -5,9 +5,11 @@
  * domain-core / 渲染层。BYO key 经 ApiKeyResolver 注入(后续换 Keychain)。
  */
 import {
+  completeSimple,
   getEnvApiKey,
   getModel,
   registerBuiltInApiProviders,
+  type Message,
   type Model
 } from "@earendil-works/pi-ai";
 
@@ -53,6 +55,33 @@ export function createModel(spec: ModelSpec): ModelHandle {
 
 /** 默认 key 解析:环境变量。占位,后续替换为 Keychain 实现。 */
 export const envApiKeyResolver: ApiKeyResolver = async (provider) => getEnvApiKey(provider);
+
+export interface GenerateTextOptions {
+  readonly system?: string;
+  readonly prompt: string;
+  readonly apiKey?: string;
+  readonly maxTokens?: number;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * 一次性文本补全(防腐封装 pi-ai 的 completeSimple)。
+ * 用于「会话标题生成」这类轻量、与主对话无关的调用——独立 Context,不碰任何
+ * session transcript / 提示缓存。reasoning 固定 minimal 以求快。
+ */
+export async function generateText(model: ModelHandle, opts: GenerateTextOptions): Promise<string> {
+  const messages: Message[] = [{ role: "user", content: opts.prompt, timestamp: Date.now() }];
+  const result = await completeSimple(
+    model,
+    { systemPrompt: opts.system, messages },
+    { apiKey: opts.apiKey, signal: opts.signal, maxTokens: opts.maxTokens ?? 64, reasoning: "minimal" }
+  );
+  return result.content
+    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    .map((c) => c.text)
+    .join("")
+    .trim();
+}
 
 // ── 本地持久化(workspace / session)──────────────────────────
 export { readJson, writeJson } from "./persistence";
