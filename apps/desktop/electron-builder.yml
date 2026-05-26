@@ -47,7 +47,9 @@ nsis:
   allowToChangeInstallationDirectory: true
 
 # 仅当显式 --publish 时上传;Release workflow 走 GitHub Releases。
+# releaseType: release —— 直接发正式版(默认 draft 会建成草稿,需手动 Publish)。
 publish:
   provider: github
   owner: horizon0514
   repo: personal-assistant
+  releaseType: release
