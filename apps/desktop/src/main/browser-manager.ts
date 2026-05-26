@@ -193,25 +193,59 @@ export class BrowserManager implements BrowserController {
     await new Promise((r) => setTimeout(r, click ? 420 : 360)); // 等光标滑到位再触发真实事件
   }
 
-  async click(selector: string, signal?: AbortSignal): Promise<{ url: string }> {
-    const wc = await this.currentWebview(signal);
-    const point = (await wc.executeJavaScript(
+  /**
+   * 定位元素并判断它能否「按坐标点」:返回视口内中心坐标 + clickable 标志。
+   * clickable=false 的常见原因:零尺寸(如百度 #su,尺寸全靠尚未生效的 CSS sprite)、
+   * 在视口外、或被其它元素遮挡(elementFromPoint 命中的不是它)。这些情形下按坐标点
+   * 会静默打偏(甚至点到 (0,0) 的别的元素)却谎报成功——上层应改走 JS 兜底。
+   */
+  private async locate(
+    wc: WebContents,
+    selector: string
+  ): Promise<{ found: false } | { found: true; x: number; y: number; clickable: boolean }> {
+    return (await wc.executeJavaScript(
       `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
+        if (!el) return { found: false };
         el.scrollIntoView({ block: 'center', inline: 'center' });
         const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        const sizeOk = r.width > 0 && r.height > 0;
+        const inView = x >= 0 && y >= 0 && x <= window.innerWidth && y <= window.innerHeight;
+        let hit = false;
+        if (sizeOk && inView) {
+          const top = document.elementFromPoint(x, y);
+          hit = !!top && (top === el || el.contains(top) || top.contains(el));
+        }
+        return { found: true, x, y, clickable: sizeOk && inView && hit };
       })()`,
       true
-    )) as { x: number; y: number } | null;
-    if (!point) throw new Error(`找不到元素:${selector}`);
+    )) as { found: false } | { found: true; x: number; y: number; clickable: boolean };
+  }
+
+  /** JS 兜底点击(isTrusted=false,但对表单提交/普通按钮可靠):坐标点不可用时用。 */
+  private async jsClick(wc: WebContents, selector: string): Promise<void> {
+    await wc.executeJavaScript(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.click(); } })()`,
+      true
+    );
+  }
+
+  async click(selector: string, signal?: AbortSignal): Promise<{ url: string }> {
+    const wc = await this.currentWebview(signal);
+    const loc = await this.locate(wc, selector);
+    if (!loc.found) throw new Error(`找不到元素:${selector}`);
     if (signal?.aborted) throw new Error("已取消");
     this.ensureDebugger(wc);
-    await this.showCursor(wc, point.x, point.y, true); // 虚拟光标滑到落点 + 涟漪
-    const base = { x: point.x, y: point.y, button: "left", clickCount: 1 };
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...base });
+    if (loc.clickable) {
+      await this.showCursor(wc, loc.x, loc.y, true); // 虚拟光标滑到落点 + 涟漪
+      const base = { x: loc.x, y: loc.y, button: "left", clickCount: 1 };
+      await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...base });
+      await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...base });
+    } else {
+      // 零尺寸/视口外/被遮挡:按坐标点会打偏,退到 JS click(对表单提交可靠)。
+      await this.jsClick(wc, selector);
+    }
     await this.waitForSettle(wc, 8000); // 等可能的整页跳转落定,再返回真实 URL
     return { url: wc.getURL() };
   }
@@ -223,25 +257,25 @@ export class BrowserManager implements BrowserController {
     signal?: AbortSignal
   ): Promise<{ url: string }> {
     const wc = await this.currentWebview(signal);
-    // 1. 定位 + 滚动到可见,拿中心坐标(后面用真实鼠标点击来「真聚焦」)。
-    const point = (await wc.executeJavaScript(
-      `(() => {
-        const el = document.querySelector(${JSON.stringify(selector)});
-        if (!el) return null;
-        el.scrollIntoView({ block: 'center', inline: 'center' });
-        const r = el.getBoundingClientRect();
-        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      })()`,
-      true
-    )) as { x: number; y: number } | null;
-    if (!point) throw new Error(`找不到输入框:${selector}`);
+    // 1. 定位 + 滚动到可见,拿可点中心坐标(后面用真实鼠标点击来「真聚焦」)。
+    const loc = await this.locate(wc, selector);
+    if (!loc.found) throw new Error(`找不到输入框:${selector}`);
     if (signal?.aborted) throw new Error("已取消");
     this.ensureDebugger(wc);
-    // 2. 真实点击聚焦——insertText 要求元素真正获得焦点,仅靠 JS focus() 在很多站点不生效。
-    await this.showCursor(wc, point.x, point.y, true); // 虚拟光标滑到输入框 + 涟漪
-    const click = { x: point.x, y: point.y, button: "left", clickCount: 1 };
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...click });
-    await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...click });
+    // 2. 聚焦:坐标可用时用真实鼠标点击聚焦(insertText 要求真焦点,JS focus() 在部分站点不生效);
+    //    坐标不可用(零尺寸/遮挡/视口外)时退到 JS focus()——否则点击打偏,焦点没拿到,
+    //    后面的 insertText 和回车提交都会落空(见 #su/#kw 零尺寸导致点击与回车双失效的真因)。
+    if (loc.clickable) {
+      await this.showCursor(wc, loc.x, loc.y, true); // 虚拟光标滑到输入框 + 涟漪
+      const click = { x: loc.x, y: loc.y, button: "left", clickCount: 1 };
+      await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", ...click });
+      await wc.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", ...click });
+    } else {
+      await wc.executeJavaScript(
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el && el.focus) el.focus(); })()`,
+        true
+      );
+    }
     // 3. 清空(原生 setter + 派发事件,兼容受控输入)。
     if (opts.clear) await this.setInputValue(wc, selector, "");
     // 4. 可信文本输入。
