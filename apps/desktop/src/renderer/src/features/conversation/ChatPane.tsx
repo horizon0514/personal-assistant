@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
-import { StepTrace, type ActionRow, type StepGroup } from "./StepTrace";
+import { TurnTrace, type ActionRow, type StepGroup } from "./StepTrace";
 import { EmptyState } from "./EmptyState";
 import { useShell } from "../shell/store";
 
@@ -199,11 +199,11 @@ export function ChatPane(): JSX.Element {
       <div ref={scrollRef} className="flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[760px] space-y-4 px-5 py-6">
           {empty && <EmptyState onPick={pickExample} />}
-          {items.map((it) =>
-            it.kind === "step" ? (
-              <StepTrace
-                key={it.stepId}
-                group={it}
+          {groupTimeline(items).map((it) =>
+            it.kind === "turn" ? (
+              <TurnTrace
+                key={it.groups[0]?.stepId ?? it.key}
+                groups={it.groups}
                 onApprove={onApprove}
                 undoableId={undoableId}
                 revertedIds={revertedIds}
@@ -285,6 +285,24 @@ function Dots(): JSX.Element {
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-300 dark:bg-ink-600" />
     </span>
   );
+}
+
+/** 渲染单元:把连续的 step 块合并成「一轮」,交给 TurnTrace 收成 live 行 / 折叠 chip */
+type TurnUnit = { kind: "turn"; key: string; groups: StepGroup[] };
+type RenderUnit = MsgItem | TurnUnit;
+
+function groupTimeline(items: TimelineItem[]): RenderUnit[] {
+  const out: RenderUnit[] = [];
+  for (const it of items) {
+    if (it.kind === "step") {
+      const last = out[out.length - 1];
+      if (last && last.kind === "turn") last.groups.push(it);
+      else out.push({ kind: "turn", key: it.stepId, groups: [it] });
+    } else {
+      out.push(it);
+    }
+  }
+  return out;
 }
 
 function appendToLastAssistant(items: TimelineItem[], text: string): TimelineItem[] {
