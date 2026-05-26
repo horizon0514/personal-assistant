@@ -20,15 +20,6 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.75.4
         version: 0.75.4(ws@8.20.1)(zod@4.4.3)
-      '@fontsource-variable/inter':
-        specifier: ^5.2.8
-        version: 5.2.8
-      '@fontsource/geist-mono':
-        specifier: ^5.2.8
-        version: 5.2.8
-      '@fontsource/noto-sans-sc':
-        specifier: ^5.2.9
-        version: 5.2.9
       '@pa/cap-browser':
         specifier: workspace:*
         version: link:../../packages/cap-browser
@@ -87,6 +78,15 @@ importers:
         specifier: ^5.0.2
         version: 5.0.13(@types/react@18.3.29)(react@18.3.1)
     devDependencies:
+      '@fontsource-variable/inter':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/geist-mono':
+        specifier: ^5.2.8
+        version: 5.2.8
+      '@fontsource/noto-sans-sc':
+        specifier: ^5.2.9
+        version: 5.2.9
       '@tailwindcss/typography':
         specifier: ^0.5.15
         version: 0.5.19(tailwindcss@3.4.19(yaml@2.9.0))
