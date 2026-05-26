@@ -7,7 +7,15 @@ import akariMark from "../../assets/akari-mark.svg";
 
 type MsgItem = { kind: "msg"; id: string; role: "user" | "assistant"; content: string };
 type StepItem = { kind: "step" } & StepGroup;
-type TimelineItem = MsgItem | StepItem;
+type VerdictItem = {
+  kind: "verdict";
+  id: string;
+  status: "running" | "pass" | "fail";
+  issues: string[];
+  summary: string;
+  retrying: boolean;
+};
+type TimelineItem = MsgItem | StepItem | VerdictItem;
 type JournalRow = { actionId: string; reverted: boolean };
 
 const base = (p: string): string => p.split(/[/\\]/).pop() || p;
@@ -115,6 +123,30 @@ export function ChatPane(): JSX.Element {
         setItems((prev) => patchAction(prev, ev.actionId, { status: "done" }));
       } else if (ev.type === "ActionFailed") {
         setItems((prev) => patchAction(prev, ev.actionId, { status: "failed", error: ev.error }));
+      } else if (ev.type === "EvaluationStarted") {
+        setItems((prev) =>
+          upsertVerdict(prev, {
+            id: `verdict:${ev.taskId}:${ev.round}`,
+            status: "running",
+            issues: [],
+            summary: "",
+            retrying: false
+          })
+        );
+      } else if (ev.type === "EvaluationCompleted") {
+        setItems((prev) => {
+          const next = upsertVerdict(prev, {
+            id: `verdict:${ev.taskId}:${ev.round}`,
+            status: ev.verdict === "pass" ? "pass" : "fail",
+            issues: ev.issues,
+            summary: ev.summary,
+            retrying: ev.retrying
+          });
+          // 自动返工:补一个空 assistant 气泡,让返工的回答落在验收结论之后
+          return ev.retrying
+            ? [...next, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }]
+            : next;
+        });
       }
     });
   }, []);
@@ -206,6 +238,8 @@ export function ChatPane(): JSX.Element {
                 onUndo={() => void window.pa.reversibility.undoLast()}
                 onView={(art) => openArtifact({ id: art.id, kind: "text", title: art.title, body: art.body })}
               />
+            ) : it.kind === "verdict" ? (
+              <VerdictRow key={it.id} item={it} />
             ) : (
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
@@ -270,6 +304,52 @@ export function ChatPane(): JSX.Element {
       </div>
     </section>
   );
+}
+
+/** 独立验收结论行(执行后核查;不持久化,仅本次会话可见)。 */
+function VerdictRow({ item }: { item: VerdictItem }): JSX.Element {
+  const label =
+    item.status === "running"
+      ? "独立验收中…"
+      : item.status === "pass"
+        ? "已独立验收"
+        : item.retrying
+          ? `验收发现 ${item.issues.length} 处问题,正在自动返工…`
+          : `验收发现 ${item.issues.length} 处问题`;
+  const tone =
+    item.status === "pass"
+      ? "text-emerald-700 ring-emerald-200/70 dark:text-emerald-300 dark:ring-emerald-500/20"
+      : item.status === "fail"
+        ? "text-amber-700 ring-amber-200/70 dark:text-amber-300 dark:ring-amber-500/20"
+        : "text-stone-500 ring-stone-200/70 dark:text-stone-400 dark:ring-white/10";
+  return (
+    <div className="flex justify-start">
+      <div className={"max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " + tone}>
+        <div className="flex items-center gap-1.5 font-medium">
+          <span>{item.status === "pass" ? "✓" : item.status === "fail" ? "⚠" : "○"}</span>
+          <span>{label}</span>
+        </div>
+        {item.summary && <p className="mt-1 text-stone-600 dark:text-stone-300">{item.summary}</p>}
+        {item.issues.length > 0 && (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-stone-600 dark:text-stone-300">
+            {item.issues.map((iss, i) => (
+              <li key={i}>{iss}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function upsertVerdict(items: TimelineItem[], v: Omit<VerdictItem, "kind">): TimelineItem[] {
+  const idx = items.findIndex((it) => it.kind === "verdict" && it.id === v.id);
+  if (idx >= 0) {
+    const next = items.slice();
+    next[idx] = { kind: "verdict", ...v };
+    return next;
+  }
+  return [...items, { kind: "verdict", ...v }];
 }
 
 function Dots(): JSX.Element {

@@ -26,11 +26,15 @@ import {
   type ActionId,
   type Capability,
   type DomainEvent,
+  type Evaluator,
   type Gatekeeper,
   type Intent,
   type StepId,
   type TaskId
 } from "@pa/domain-core";
+
+export { createPiEvaluator, type PiEvaluatorDeps } from "./evaluator";
+export type { Evaluator, EvaluationRequest, Verdict } from "@pa/domain-core";
 
 // Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。
 export type { Gatekeeper, ToolCallIntent, GateDecision } from "@pa/domain-core";
@@ -129,6 +133,10 @@ export interface PiAgentAdapterDeps {
   readonly initialMessages?: AgentMessage[];
   /** 上下文注入(如 Personal Memory 召回):返回的文本会作为前置消息注入每次 LLM 调用 */
   readonly contextProvider?: () => string | undefined;
+  /** 执行后独立验收器(可选)。调过工具的任务跑完后,由它对照目标核查产出。 */
+  readonly evaluator?: Evaluator;
+  /** 验收不通过时自动返工的最大轮数(evaluator-optimizer 闭环)。默认 1。 */
+  readonly maxEvalRetries?: number;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
@@ -145,8 +153,12 @@ export interface PiAgentAdapterDeps {
   }) => void | Promise<void>;
 }
 
+const DEFAULT_MAX_EVAL_RETRIES = 1;
+
 export class PiAgentAdapter {
   private readonly agent: Agent;
+  /** 用户主动中断标记:中断后跳过验收与返工。 */
+  private aborted = false;
 
   constructor(private readonly deps: PiAgentAdapterDeps) {
     const gate = deps.gatekeeper ?? allowAllGatekeeper;
@@ -205,12 +217,24 @@ export class PiAgentAdapter {
   /** 接收一个 Intent,跑通 agent 循环,期间把领域事件推给 onEvent。 */
   async startTask(intent: Intent): Promise<TaskId> {
     const taskId = newTaskId();
+    this.aborted = false;
     this.deps.onEvent({ type: "TaskCreated", taskId, intent });
     const translator = new DomainTranslator(taskId, this.deps.capabilityOf);
+
+    // 验收所需的过程信息:是否调过工具、动作日志(累计)、本轮最终汇报文本。
+    let sawTool = false;
+    const actionLog: { tool: string; ok: boolean }[] = [];
+    let roundSummary = "";
+
     const unsubscribe = this.agent.subscribe((event) => {
-      // 助理文本增量 → Conversation 通道
+      // 助理文本增量 → Conversation 通道 + 累计本轮汇报
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        roundSummary += event.assistantMessageEvent.delta;
         this.deps.onAssistantDelta?.(event.assistantMessageEvent.delta);
+      }
+      if (event.type === "tool_execution_start") sawTool = true;
+      if (event.type === "tool_execution_end") {
+        actionLog.push({ tool: event.toolName, ok: !event.isError });
       }
       // 每个 turn 的 assistant 消息收尾:非正常停因(error/aborted)打日志,便于定位被吞的模型错误
       if (event.type === "message_end") {
@@ -219,16 +243,52 @@ export class PiAgentAdapter {
           console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
         }
       }
-      // 任务/动作生命周期 → 领域事件通道
+      // 任务/动作生命周期 → 领域事件通道。
+      // 注意:translator 在每次 agent_end(每轮 prompt 收尾)都会产出 TaskCompleted;
+      // 但"任务完成"应在验收/返工闭环结束后只发一次,故在此抑制,末尾统一补发。
       for (const domainEvent of translator.translate(event)) {
+        if (domainEvent.type === "TaskCompleted") continue;
         this.deps.onEvent(domainEvent);
       }
     });
+
+    const maxRetries = this.deps.maxEvalRetries ?? DEFAULT_MAX_EVAL_RETRIES;
     try {
-      await this.agent.prompt(intent.text);
+      let prompt = intent.text;
+      for (let round = 0; ; round++) {
+        roundSummary = "";
+        await this.agent.prompt(prompt);
+
+        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接结束
+        if (!this.deps.evaluator || !sawTool || this.aborted || this.agent.state.errorMessage) break;
+
+        this.deps.onEvent({ type: "EvaluationStarted", taskId, round });
+        const verdict = await this.deps.evaluator.evaluate({
+          taskId,
+          intent,
+          actionLog: [...actionLog],
+          finalSummary: roundSummary.trim()
+        });
+        const willRetry = !verdict.pass && round < maxRetries && !this.aborted;
+        this.deps.onEvent({
+          type: "EvaluationCompleted",
+          taskId,
+          round,
+          verdict: verdict.pass ? "pass" : "fail",
+          issues: [...verdict.issues],
+          summary: verdict.summary,
+          retrying: willRetry
+        });
+        if (!willRetry) break;
+
+        // 返工:把问题清单回灌给执行器(同一 agent,带上下文)再跑一轮
+        prompt = `「独立验收」未通过,发现以下问题,请逐条核实并修正后继续把任务做完(完成后简洁汇报即可):\n- ${verdict.issues.join("\n- ")}`;
+      }
     } finally {
       unsubscribe();
     }
+
+    this.deps.onEvent({ type: "TaskCompleted", taskId });
     if (this.agent.state.errorMessage) {
       console.error(`[agent] 运行结束但带错误: ${this.agent.state.errorMessage}`);
     }
@@ -242,6 +302,7 @@ export class PiAgentAdapter {
 
   /** 中断当前运行(用户点停止)。pi 会以 aborted 收尾,prompt() 正常 resolve。 */
   abort(): void {
+    this.aborted = true;
     this.agent.abort();
   }
 

@@ -9,7 +9,7 @@
 import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { PiAgentAdapter, type AgentMessage } from "@pa/ctx-task";
+import { PiAgentAdapter, createPiEvaluator, type AgentMessage } from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
@@ -34,7 +34,7 @@ import { documentTools, documentToolNames, documentToolRisk, documentGuidelines 
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { BrowserManager } from "./browser-manager";
 import { newConversationId, type Capability, type DomainEvent, type RiskLevel } from "@pa/domain-core";
-import { buildSystemPrompt, buildSessionContext } from "./system-prompt";
+import { buildSystemPrompt, buildSessionContext, buildEvaluatorPrompt } from "./system-prompt";
 import { transcriptToTimeline, VIEWABLE_TOOLS } from "./transcript-to-timeline";
 import { keyStore } from "./key-store";
 
@@ -54,6 +54,16 @@ for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
+
+// 评估器可用的只读工具(独立核查产出用;不含记忆写入/破坏性工具)。
+const EVALUATOR_TOOLS = new Set([
+  "list_dir",
+  "read_file",
+  "find_files",
+  "grep_files",
+  "extract_document",
+  "read_current_page"
+]);
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -162,10 +172,22 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     // 新记忆的情景里记下它从哪个会话学来的
     ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
   ];
+  // 优先用户在设置里存的 key(safeStorage),其次构建期 .env(dev 兜底),最后环境变量
+  const apiKeyResolver = async (provider: string): Promise<string | undefined> =>
+    keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider));
+
+  // 独立验收器:同模型 + 只读工具子集 + 挑剔的评估器提示,与执行器上下文隔离。
+  const evaluator = createPiEvaluator({
+    model,
+    apiKeyResolver,
+    systemPrompt: buildEvaluatorPrompt(),
+    readonlyTools: tools.filter((t) => EVALUATOR_TOOLS.has(t.name))
+  });
+
   return new PiAgentAdapter({
     model,
-    // 优先用户在设置里存的 key(safeStorage),其次构建期 .env(dev 兜底),最后环境变量
-    apiKeyResolver: async (provider) => keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider)),
+    apiKeyResolver,
+    evaluator,
     systemPrompt: buildSystemPrompt({
       tools: tools.map((t) => ({ name: t.name, description: t.description })),
       guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]

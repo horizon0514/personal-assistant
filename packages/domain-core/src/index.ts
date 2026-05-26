@@ -111,6 +111,33 @@ export interface Gatekeeper {
   evaluate(call: ToolCallIntent): Promise<GateDecision>;
 }
 
+// ── Evaluator 端口(共享内核:ctx-task 消费并实现)──────────────
+// 与 Gatekeeper 维度正交:Gatekeeper 问「单个动作能不能做」(安全,执行前);
+// Evaluator 问「整件事做得好不好」(质量,执行后)。由独立、干净上下文的
+// 评估器对照目标核查产出,避免执行器自评的过度自信。详见 research/agent-design-insights.md §1。
+
+/** 评估器看到的一次执行产出 */
+export interface EvaluationRequest {
+  readonly taskId: TaskId;
+  readonly intent: Intent;
+  /** 本次执行调用过的工具及其成败(供评估器判断做了什么) */
+  readonly actionLog: readonly { readonly tool: string; readonly ok: boolean }[];
+  /** 执行器最后给用户的文字汇报 */
+  readonly finalSummary: string;
+}
+
+/** 评估判定:通过 / 不通过 + 问题清单 */
+export interface Verdict {
+  readonly pass: boolean;
+  readonly issues: readonly string[];
+  readonly summary: string;
+}
+
+/** 评估器端口:执行完一个真实任务后独立验收 */
+export interface Evaluator {
+  evaluate(req: EvaluationRequest): Promise<Verdict>;
+}
+
 // ── 领域事件(贯穿上下文的脊柱)───────────────────────────────
 // 后续按上下文细化;此处先立 union 骨架。
 export type DomainEvent =
@@ -125,6 +152,18 @@ export type DomainEvent =
   | { type: "ActionFailed"; taskId: TaskId; actionId: ActionId; error: string }
   | { type: "TaskCompleted"; taskId: TaskId }
   | { type: "TaskFailed"; taskId: TaskId; error: string }
+  // Evaluation(执行后独立验收)
+  | { type: "EvaluationStarted"; taskId: TaskId; round: number }
+  | {
+      type: "EvaluationCompleted";
+      taskId: TaskId;
+      round: number;
+      verdict: "pass" | "fail";
+      issues: string[];
+      summary: string;
+      /** 本轮不通过后是否会自动返工再评一轮 */
+      retrying: boolean;
+    }
   // Trust & Governance
   | { type: "RiskClassified"; actionId: ActionId; riskLevel: RiskLevel }
   | { type: "ApprovalRequested"; actionId: ActionId; riskLevel: RiskLevel }

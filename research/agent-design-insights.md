@@ -16,6 +16,8 @@
 
 ## 1. 执行与评估必须分离 —— 我们现在是同体自评(认知层最该修)
 
+> **状态:已落地(2026-05-26)。** `Evaluator`/`Verdict` 端口在 domain-core;`createPiEvaluator`(起第二个 pi Agent,只读工具 + `submit_verdict`)在 ctx-task;组合根 `agent.ts` 注入;`PiAgentAdapter.startTask` 在调过工具的任务跑完后调用它,不通过则回灌问题清单自动返工(默认最多 1 轮),ChatPane 显示验收结论。Sprint Contract(§4)与成本 telemetry(§5)仍未做。
+
 `harness-design` 核心论点:**让干活的 agent 评估自己,必然过度自信(predictable overconfidence)**;要一个独立的 evaluator persona,可调成"该有的怀疑态度",形成具体反馈回路。
 
 我们 `TODO.md`「完成前强制自验证」方向对(prompt 软约束 → harness 硬关卡),但**"自验证"正踩文章警告的坑**:同一个被 context anxiety 催着收尾的 agent 核查自己,会倾向于说"done"。
