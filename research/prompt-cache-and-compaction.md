@@ -1,6 +1,6 @@
 # Prompt Cache 与压缩:pi 实测行为 + 工程取舍
 
-> 更新:2026-05-22 · 配套:[`design-discussion.md`](design-discussion.md) · [`status-and-roadmap.md`](status-and-roadmap.md)
+> 更新:2026-05-22 · 配套:[`design-discussion.md`](design-discussion.md) · [`status-and-roadmap.md`](status-and-roadmap.md) · [`agent-design-insights.md`](agent-design-insights.md)
 >
 > 缘起:一篇关于本地 Agent(OpenClacky)的工程复盘,核心论点是「把工程预算花在 harness 上,把智能预算留给模型」,并给出 7 个围绕 **cache 局部性 + 工具集稳定性** 的决策。本项目与之同类(去终端化本地 Agent),所以逐条对照,记录**哪些 pi 已经替我们做了、哪些是我们自己的责任、哪些是坑**。
 
