@@ -7,8 +7,8 @@
  * screenshot/current)都作用在这一个可见页面上——透明即监督。
  *
  * 例外:web_fetch 是无状态的只读正文抽取,且常被 LLM 并发调用。若也共用那个可见 webview,
- * 并发 loadURL 会互相中断、各自读到错页。故 fetch 每次开一个隐藏 BrowserWindow(共用同一
- * persist:research partition 保留登录态),抓完即销毁,真正并行(见 fetch())。
+ * 并发 loadURL 会互相中断、各自读到错页。故 fetch 走一个隐藏 BrowserWindow 池(共用同一
+ * persist:research partition 保留登录态):池内复用窗口、限并发、闲置自动回收(见 fetch())。
  *
  * 架构见 research/design-discussion.md「内置浏览器调研」:驱动 Electron 自带 Chromium,
  * 可见、非 headless、持久 partition(登录态留存),不接管用户 Chrome、不用搜索 API。
@@ -22,15 +22,19 @@ const LOAD_TIMEOUT_MS = 30_000;
 const SEARCH_URL = (q: string): string => `https://www.bing.com/search?q=${encodeURIComponent(q)}`;
 /** 隐藏抓取窗口与可见 <webview> 共用此 partition,登录态(cookies)互通。 */
 const RESEARCH_PARTITION = "persist:research";
-/** 隐藏抓取窗口的并发上限:web_fetch 常被并发调用,无界开窗会吃满内存,故设信号量排队。 */
-const MAX_CONCURRENT_FETCH = 6;
+/** 抓取窗口池上限:web_fetch 常被并发调用,池化复用避免反复建/销渲染进程的开销。 */
+const MAX_FETCH_WINDOWS = 4;
+/** 闲置窗口存活时长:过了还没被复用就销毁,释放渲染进程内存。 */
+const FETCH_IDLE_TTL_MS = 30_000;
 
 export class BrowserManager implements BrowserController {
   private webview: WebContents | undefined;
   private waiters: ((wc: WebContents) => void)[] = [];
-  /** 抓取信号量:可用槽位数 + 等待者队列。 */
-  private fetchSlots = MAX_CONCURRENT_FETCH;
-  private fetchQueue: (() => void)[] = [];
+  /** 抓取窗口池:idle 为闲置可复用的窗口,fetchLive 为已创建总数(闲置 + 占用)。 */
+  private fetchIdle: BrowserWindow[] = [];
+  private fetchWaiters: ((win: BrowserWindow) => void)[] = [];
+  private fetchLive = 0;
+  private fetchIdleTimers = new Map<BrowserWindow, ReturnType<typeof setTimeout>>();
 
   constructor() {
     // 渲染层挂载 <webview> 时,这里拿到它的 webContents
@@ -375,52 +379,99 @@ export class BrowserManager implements BrowserController {
     )) as FetchedPage;
   }
 
-  /** 取一个抓取槽位(满了就排队),released 后才返回。 */
-  private acquireFetchSlot(): Promise<void> {
-    if (this.fetchSlots > 0) {
-      this.fetchSlots--;
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => this.fetchQueue.push(resolve));
+  /** 新建一个隐藏抓取窗口,登记到池计数并挂好回收/崩溃清理。 */
+  private createFetchWindow(): BrowserWindow {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        partition: RESEARCH_PARTITION, // 与可见 webview 共用登录态
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false // 隐藏窗口默认会被节流,关掉以保证及时加载
+      }
+    });
+    win.webContents.setAudioMuted(true);
+    this.fetchLive++;
+    // 渲染进程崩溃时销毁窗口,避免把坏掉的实例复用出去(closed 里统一维护计数)。
+    win.webContents.on("render-process-gone", () => {
+      if (!win.isDestroyed()) win.destroy();
+    });
+    win.on("closed", () => {
+      this.fetchLive--;
+      const i = this.fetchIdle.indexOf(win);
+      if (i >= 0) this.fetchIdle.splice(i, 1);
+      const t = this.fetchIdleTimers.get(win);
+      if (t) clearTimeout(t);
+      this.fetchIdleTimers.delete(win);
+    });
+    return win;
   }
 
-  /** 归还槽位:有等待者则直接转交(不回填计数),否则计数 +1。 */
-  private releaseFetchSlot(): void {
-    const next = this.fetchQueue.shift();
-    if (next) next();
-    else this.fetchSlots++;
+  /** 从池里取一个抓取窗口:优先复用闲置窗口,其次新建,达上限则排队等归还。 */
+  private acquireFetchWindow(signal?: AbortSignal): Promise<BrowserWindow> {
+    while (this.fetchIdle.length) {
+      const win = this.fetchIdle.pop() as BrowserWindow;
+      const t = this.fetchIdleTimers.get(win);
+      if (t) clearTimeout(t);
+      this.fetchIdleTimers.delete(win);
+      if (!win.isDestroyed()) return Promise.resolve(win);
+    }
+    if (this.fetchLive < MAX_FETCH_WINDOWS) return Promise.resolve(this.createFetchWindow());
+    return new Promise<BrowserWindow>((resolve, reject) => {
+      const waiter = (win: BrowserWindow): void => {
+        cleanup();
+        resolve(win);
+      };
+      const onAbort = (): void => {
+        const i = this.fetchWaiters.indexOf(waiter);
+        if (i >= 0) this.fetchWaiters.splice(i, 1);
+        cleanup();
+        reject(new Error("已取消"));
+      };
+      const cleanup = (): void => signal?.removeEventListener("abort", onAbort);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.fetchWaiters.push(waiter);
+    });
+  }
+
+  /** 归还抓取窗口:有等待者直接转交复用;否则回 about:blank 释放内存并进闲置池待回收。 */
+  private releaseFetchWindow(win: BrowserWindow): void {
+    if (win.isDestroyed()) return; // closed 事件已维护计数
+    const waiter = this.fetchWaiters.shift();
+    if (waiter) {
+      waiter(win); // 下一次 fetch 会自行导航,无需先 blank
+      return;
+    }
+    win.webContents.stop();
+    void win.webContents.loadURL("about:blank").catch(() => {});
+    this.fetchIdle.push(win);
+    const t = setTimeout(() => {
+      const i = this.fetchIdle.indexOf(win);
+      if (i >= 0) this.fetchIdle.splice(i, 1);
+      this.fetchIdleTimers.delete(win);
+      if (!win.isDestroyed()) win.destroy();
+    }, FETCH_IDLE_TTL_MS);
+    this.fetchIdleTimers.set(win, t);
   }
 
   /**
    * 抓取单页正文。与 search/click/type 等交互工具不同,web_fetch 是无状态的只读抽取,
    * 且常被 LLM 并发调用——若共用那一个可见 webview,并发 loadURL 会互相中断、各自读到错页。
-   * 这里每次抓取开一个**隐藏 BrowserWindow**(共用 persist:research partition 保留登录态),
-   * 抓完即销毁,从而真正并行;并发数受 MAX_CONCURRENT_FETCH 信号量约束,避免开窗吃满内存。
+   * 这里走一个**隐藏 BrowserWindow 池**(共用 persist:research partition 保留登录态):
+   * 池内复用窗口(避免反复建/销渲染进程的开销),并发数受 MAX_FETCH_WINDOWS 约束、
+   * 满了排队,闲置窗口超 FETCH_IDLE_TTL_MS 自动销毁释放内存。
    */
   async fetch(url: string, signal?: AbortSignal): Promise<FetchedPage> {
     if (signal?.aborted) throw new Error("已取消");
-    await this.acquireFetchSlot();
-    let win: BrowserWindow | undefined;
+    const win = await this.acquireFetchWindow(signal);
     try {
       if (signal?.aborted) throw new Error("已取消");
-      win = new BrowserWindow({
-        show: false,
-        webPreferences: {
-          partition: RESEARCH_PARTITION, // 与可见 webview 共用登录态
-          sandbox: true,
-          contextIsolation: true,
-          nodeIntegration: false,
-          backgroundThrottling: false // 隐藏窗口默认会被节流,关掉以保证及时加载
-        }
-      });
-      const wc = win.webContents;
-      wc.setAudioMuted(true);
-      await this.loadUrl(wc, url, signal);
+      await this.loadUrl(win.webContents, url, signal);
       await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
-      return await this.readReadable(wc);
+      return await this.readReadable(win.webContents);
     } finally {
-      if (win && !win.isDestroyed()) win.destroy();
-      this.releaseFetchSlot();
+      this.releaseFetchWindow(win);
     }
   }
 
