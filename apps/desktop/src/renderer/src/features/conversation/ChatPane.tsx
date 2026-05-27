@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
-import { StepTrace, type ActionRow, type StepGroup } from "./StepTrace";
+import { TurnTrace, type ActionRow, type StepGroup } from "./StepTrace";
+import { EmptyState } from "./EmptyState";
 import { useShell } from "../shell/store";
-import akariMark from "../../assets/akari-mark.svg";
 
 type MsgItem = { kind: "msg"; id: string; role: "user" | "assistant"; content: string };
 type StepItem = { kind: "step" } & StepGroup;
@@ -62,6 +62,7 @@ export function ChatPane(): JSX.Element {
   const [streaming, setStreaming] = useState(false);
   const [journal, setJournal] = useState<JournalRow[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   // 标记:本次 activeSessionId 变化是「为发送而新建会话」,items 已乐观填充,勿回盘清空
   const sentIntoNewSession = useRef(false);
 
@@ -160,8 +161,20 @@ export function ChatPane(): JSX.Element {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [items]);
 
-  const send = (): void => {
-    const text = input.trim();
+  // 示例卡:把提示填进输入框并聚焦,让用户补全(网页调研/读 PDF 等需要具体目标)后再发送
+  const pickExample = (text: string): void => {
+    setInput(text);
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  };
+
+  const send = (textArg?: string): void => {
+    const text = (textArg ?? input).trim();
     if (!text || streaming) return;
     // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
     if (!activeSessionId) sentIntoNewSession.current = true;
@@ -185,21 +198,12 @@ export function ChatPane(): JSX.Element {
     <section className="flex min-w-0 flex-1 flex-col">
       <div ref={scrollRef} className="flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[760px] space-y-4 px-5 py-6">
-          {empty && (
-            <div className="flex h-[60vh] flex-col items-center justify-center text-center">
-              <img
-                src={akariMark}
-                alt="Akari"
-                className="mb-4 h-14 w-14 rounded-2xl shadow-glow"
-              />
-              <p className="text-[15px] font-medium text-stone-500 dark:text-stone-400">难办的事,先点一盏灯</p>
-            </div>
-          )}
-          {items.map((it) =>
-            it.kind === "step" ? (
-              <StepTrace
-                key={it.stepId}
-                group={it}
+          {empty && <EmptyState onPick={pickExample} />}
+          {groupTimeline(items).map((it) =>
+            it.kind === "turn" ? (
+              <TurnTrace
+                key={it.groups[0]?.stepId ?? it.key}
+                groups={it.groups}
                 onApprove={onApprove}
                 undoableId={undoableId}
                 revertedIds={revertedIds}
@@ -234,6 +238,7 @@ export function ChatPane(): JSX.Element {
         <div className="mx-auto w-full max-w-[760px] px-4 pb-5 pt-2">
           <div className="no-drag flex items-end gap-2 rounded-xl border border-stone-200 bg-white p-2 transition focus-within:border-ember-400 focus-within:ring-2 focus-within:ring-ember-500/15 dark:border-white/10 dark:bg-ink-900 dark:focus-within:border-ember-500/60 dark:focus-within:ring-ember-500/20">
             <textarea
+              ref={inputRef}
               rows={1}
               className="max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13.5px] text-stone-700 outline-none placeholder:text-stone-500 dark:text-stone-100 dark:placeholder:text-stone-500"
               placeholder="发消息给助理…  (Enter 发送 · Shift+Enter 换行)"
@@ -258,7 +263,7 @@ export function ChatPane(): JSX.Element {
             ) : (
               <button
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-ember-500 text-ink-900 shadow-glow transition hover:bg-ember-400 disabled:opacity-30 disabled:shadow-none"
-                onClick={send}
+                onClick={() => send()}
                 disabled={input.trim() === ""}
                 aria-label="发送"
               >
@@ -280,6 +285,24 @@ function Dots(): JSX.Element {
       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-stone-300 dark:bg-ink-600" />
     </span>
   );
+}
+
+/** 渲染单元:把连续的 step 块合并成「一轮」,交给 TurnTrace 收成 live 行 / 折叠 chip */
+type TurnUnit = { kind: "turn"; key: string; groups: StepGroup[] };
+type RenderUnit = MsgItem | TurnUnit;
+
+function groupTimeline(items: TimelineItem[]): RenderUnit[] {
+  const out: RenderUnit[] = [];
+  for (const it of items) {
+    if (it.kind === "step") {
+      const last = out[out.length - 1];
+      if (last && last.kind === "turn") last.groups.push(it);
+      else out.push({ kind: "turn", key: it.stepId, groups: [it] });
+    } else {
+      out.push(it);
+    }
+  }
+  return out;
 }
 
 function appendToLastAssistant(items: TimelineItem[], text: string): TimelineItem[] {

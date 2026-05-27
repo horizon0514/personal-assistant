@@ -67,6 +67,8 @@ export interface ApprovalRequest {
 const api = {
   ping: (): Promise<string> => ipcRenderer.invoke("app:ping"),
   appVersion: (): Promise<string> => ipcRenderer.invoke("app:version"),
+  /** 系统账户名(本地取,供空白页问候个性化);取不到为空串 */
+  userName: (): Promise<string> => ipcRenderer.invoke("system:userName"),
   settings: {
     /** 打开独立设置窗(单实例) */
     open: (): Promise<void> => ipcRenderer.invoke("settings:open"),

@@ -58,6 +58,43 @@ body {
   }
 }
 
+/* 空白页徽标:进场「点亮」+ 持续轻呼吸的灯光,呼应「点一盏灯」 */
+@keyframes lamp-ignite {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+    filter: brightness(0.55) saturate(0.7);
+  }
+  55% {
+    opacity: 1;
+    filter: brightness(1.18) saturate(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+    filter: brightness(1);
+  }
+}
+@keyframes lamp-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 22px -6px rgba(243, 167, 56, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 36px -4px rgba(243, 167, 56, 0.62);
+  }
+}
+.lamp-glow {
+  animation:
+    lamp-ignite 0.75s ease-out both,
+    lamp-breathe 4.5s ease-in-out 0.75s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lamp-glow {
+    animation: none;
+  }
+}
+
 /* 窗口拖拽区(配合 macOS 隐藏标题栏)*/
 .drag {
   -webkit-app-region: drag;

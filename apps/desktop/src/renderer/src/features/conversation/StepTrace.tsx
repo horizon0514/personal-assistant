@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, ChevronRight, Clock, Eye, Loader2, Undo2 } from "lucide-react";
 
-/** 对话内联执行轨迹:工具按 step 归组。完成即折叠;审批/撤销内联到对应 action 行。 */
+/**
+ * 对话内联执行轨迹。
+ * - 活跃中:只显示一条会原地更新的 live 行(最新动作),不让历史步骤堆积。
+ * - 一轮结束后:整轮收成一个「执行了 N 步」chip,点开就地展开全部动作。
+ * - 说人话:弱化原始工具名,用自然语言动词("搜索了「xxx」""读了 report.pdf")。
+ */
 
 export interface ActionRow {
   id: string;
@@ -22,8 +27,9 @@ export interface StepGroup {
   actions: ActionRow[];
 }
 
-export interface StepTraceProps {
-  group: StepGroup;
+export interface TurnTraceProps {
+  /** 同一轮里连续的若干 step 块 */
+  groups: StepGroup[];
   onApprove: (actionId: string, approved: boolean) => void;
   /** 当前可撤销(LIFO 栈顶)的 actionId */
   undoableId?: string;
@@ -34,25 +40,37 @@ export interface StepTraceProps {
   onView: (artifact: { id: string; title: string; body: string }) => void;
 }
 
-/** 工具名 → 中文动词(折叠摘要 + 行内展示用) */
-const TOOL_LABELS: Record<string, string> = {
-  list_dir: "列目录",
-  read_file: "读取",
-  find_files: "搜索",
-  grep_files: "搜索",
-  write_file: "写入",
-  move_file: "移动",
-  delete: "删除",
-  plan_file_changes: "批量改动",
-  extract_document: "提取文档",
-  remember: "记忆",
-  update_memory: "更新记忆",
-  forget_memory: "遗忘",
-  search_memory: "查记忆",
-  web_search: "网页搜索",
-  web_fetch: "抓取网页"
+/** 工具名 → 自然语言动词(现在时 / 过去时) */
+const TOOL_PHRASE: Record<string, { now: string; past: string }> = {
+  list_dir: { now: "查看目录", past: "查看了目录" },
+  read_file: { now: "读取", past: "读了" },
+  find_files: { now: "查找文件", past: "查找了文件" },
+  grep_files: { now: "搜索", past: "搜索了" },
+  write_file: { now: "写入", past: "写入了" },
+  move_file: { now: "移动", past: "移动了" },
+  delete: { now: "删除", past: "删除了" },
+  plan_file_changes: { now: "规划改动", past: "规划了改动" },
+  extract_document: { now: "提取文档", past: "提取了文档" },
+  remember: { now: "记住", past: "记住了" },
+  update_memory: { now: "更新记忆", past: "更新了记忆" },
+  forget_memory: { now: "清除记忆", past: "清除了记忆" },
+  search_memory: { now: "查记忆", past: "查了记忆" },
+  web_search: { now: "搜索", past: "搜索了" },
+  web_fetch: { now: "打开网页", past: "打开了网页" }
 };
-const verbOf = (tool: string): string => TOOL_LABELS[tool] ?? tool;
+/** 摘要是「查询词」性质的工具:用「」引号包裹更像人话;否则(文件名/URL)直接跟在后面 */
+const QUOTE_TOOLS = new Set(["web_search", "search_memory", "grep_files", "find_files", "remember", "update_memory"]);
+
+/** 一条动作的自然语言短句(不含原始工具名) */
+function phraseOf(a: ActionRow): string {
+  const p = TOOL_PHRASE[a.tool];
+  const verb = p ? (a.status === "done" ? p.past : p.now) : a.tool;
+  const prefix = a.status === "running" ? "正在" : "";
+  const tail = a.status === "running" ? "…" : "";
+  let arg = "";
+  if (a.summary) arg = QUOTE_TOOLS.has(a.tool) ? `「${a.summary}」` : ` ${a.summary}`;
+  return `${prefix}${verb}${arg}${tail}`;
+}
 
 function StatusIcon({ status }: { status: ActionRow["status"] }): JSX.Element {
   if (status === "awaiting") return <Clock size={13} className="shrink-0 text-sky-500" />;
@@ -61,32 +79,57 @@ function StatusIcon({ status }: { status: ActionRow["status"] }): JSX.Element {
   return <AlertCircle size={13} className="shrink-0 text-rose-500" />;
 }
 
-export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, onView }: StepTraceProps): JSX.Element {
-  const { actions } = group;
+export function TurnTrace({ groups, onApprove, undoableId, revertedIds, onUndo, onView }: TurnTraceProps): JSX.Element {
+  const actions = groups.flatMap((g) => g.actions);
   const active = actions.some((a) => a.status === "running" || a.status === "awaiting");
   const failed = actions.some((a) => a.status === "failed");
-  const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? active; // 活跃步骤默认展开;完成后自动折叠(除非用户手动开)
+  const [expanded, setExpanded] = useState(false);
+  const liveRef = useRef<HTMLDivElement>(null);
 
-  // 折叠摘要:不同动词(最多 2 个)+ 总数
-  const verbs = [...new Set(actions.map((a) => verbOf(a.tool)))];
-  const summary = verbs.slice(0, 2).join(" · ") + (verbs.length > 2 ? "…" : "");
+  const shared = { onApprove, onUndo, onView };
 
+  // 活跃中:固定高度的自动滚动框 —— 看得到步骤内容,新步骤往下加并自动滚到底,但不撑大页面
+  // (auto-scroll 跟随活跃步骤数变化)
+  useEffect(() => {
+    if (active && liveRef.current) liveRef.current.scrollTop = liveRef.current.scrollHeight;
+  }, [active, actions.length, actions[actions.length - 1]?.status]);
+
+  if (active) {
+    return (
+      <div className="pl-1">
+        <div
+          ref={liveRef}
+          className="max-h-28 space-y-1 overflow-auto border-l border-stone-200/70 py-0.5 pl-3 dark:border-white/5"
+        >
+          {actions.map((a) => (
+            <ActionLine key={a.id} a={a} undoable={false} reverted={false} {...shared} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // 结算后只有单步:直接显示这一行,不必折成 chip 再点开
+  if (!active && actions.length === 1 && actions[0]) {
+    const a = actions[0];
+    return (
+      <div className="pl-1">
+        <ActionLine a={a} undoable={a.id === undoableId} reverted={revertedIds.has(a.id)} {...shared} />
+      </div>
+    );
+  }
+
+  // 结算后多步:默认折叠成 chip;或用户手动展开
   return (
     <div className="pl-1">
       <button
-        className="flex w-full items-center gap-1.5 py-0.5 text-left text-[11px] text-stone-500 transition hover:text-stone-500 dark:text-stone-500"
-        onClick={() => setOverride(!open)}
+        className="flex w-full items-center gap-1.5 py-0.5 text-left text-[11px] text-stone-500 transition hover:text-stone-600 dark:text-stone-500 dark:hover:text-stone-300"
+        onClick={() => setExpanded(!expanded)}
       >
-        <ChevronRight size={12} className={"shrink-0 transition " + (open ? "rotate-90" : "")} />
-        <span className="font-medium">步骤 {group.index}</span>
-        {!open && (
-          <span className="truncate text-stone-500 dark:text-stone-500">
-            · {summary} ×{actions.length}
-          </span>
-        )}
+        <ChevronRight size={12} className={"shrink-0 transition " + (expanded ? "rotate-90" : "")} />
+        <span className="font-medium">执行了 {actions.length} 步</span>
         <span className="ml-auto shrink-0">
-          {active ? null : failed ? (
+          {failed ? (
             <AlertCircle size={12} className="text-rose-400" />
           ) : (
             <Check size={12} className="text-emerald-400" />
@@ -94,17 +137,15 @@ export function StepTrace({ group, onApprove, undoableId, revertedIds, onUndo, o
         </span>
       </button>
 
-      {open && (
+      {expanded && (
         <div className="ml-[7px] space-y-1 border-l border-stone-200/70 py-0.5 pl-3 dark:border-white/5">
           {actions.map((a) => (
             <ActionLine
               key={a.id}
               a={a}
-              onApprove={onApprove}
               undoable={a.id === undoableId}
               reverted={revertedIds.has(a.id)}
-              onUndo={onUndo}
-              onView={onView}
+              {...shared}
             />
           ))}
         </div>
@@ -129,19 +170,18 @@ function ActionLine({
   onView: (artifact: { id: string; title: string; body: string }) => void;
 }): JSX.Element {
   const viewable = a.status === "done" && !!a.resultBody;
-  const view = (): void =>
-    onView({ id: a.id, title: `${verbOf(a.tool)}${a.summary ? " · " + a.summary : ""}`, body: a.resultBody ?? "" });
+  const view = (): void => onView({ id: a.id, title: phraseOf({ ...a, status: "done" }), body: a.resultBody ?? "" });
   return (
     <div className="text-[12.5px]">
       <div className="flex items-center gap-2">
         <StatusIcon status={a.status} />
-        <span className="shrink-0 font-mono text-[11.5px] text-stone-500 dark:text-stone-400">{a.tool}</span>
-        {a.summary && (
-          <span className="min-w-0 flex-1 truncate text-stone-700 dark:text-stone-200" title={a.summary}>
-            {a.summary}
-          </span>
-        )}
-        <span className={a.summary ? "shrink-0" : "ml-auto shrink-0"}>
+        <span
+          className="min-w-0 flex-1 truncate text-stone-700 dark:text-stone-200"
+          title={`${a.tool}${a.summary ? " · " + a.summary : ""}`}
+        >
+          {phraseOf(a)}
+        </span>
+        <span className="shrink-0">
           {a.status === "awaiting" ? (
             <span className="flex items-center gap-1.5">
               {a.riskLevel && (
