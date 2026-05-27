@@ -1,5 +1,7 @@
 import "./app-identity"; // 必须最先执行:设 app 名与 userData 目录(早于任何持久化模块)
 import { join } from "node:path";
+import { userInfo } from "node:os";
+import { execFileSync } from "node:child_process";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { registerIpc } from "./ipc";
 import { setMainWindow } from "./main-window";
@@ -70,9 +72,30 @@ function createWindow(): void {
   loadEntry(win, "index.html");
 }
 
+/**
+ * 系统账户名(本地软件可直接取,纯本地不外传),供空白页问候个性化。
+ * 优先 macOS 显示全名(id -F)→ 退登录短名 → 再退空串(纯时段问候)。
+ */
+function systemUserName(): string {
+  if (process.platform === "darwin") {
+    try {
+      const full = execFileSync("id", ["-F"], { encoding: "utf8", timeout: 1000 }).trim();
+      if (full) return full;
+    } catch {
+      /* 退到短名 */
+    }
+  }
+  try {
+    return userInfo().username || "";
+  } catch {
+    return "";
+  }
+}
+
 // 占位 IPC:渲染层握手用
 ipcMain.handle("app:ping", () => "pong");
 ipcMain.handle("app:version", () => app.getVersion());
+ipcMain.handle("system:userName", () => systemUserName());
 // 打开设置窗(切换器「设置」入口 + ⌘,)
 ipcMain.handle("settings:open", () => openSettings());
 // 全局设置:主题

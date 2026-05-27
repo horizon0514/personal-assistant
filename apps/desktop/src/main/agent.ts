@@ -16,6 +16,7 @@ import { OperationJournal } from "@pa/ctx-reversibility";
 import {
   createModel,
   envApiKeyResolver,
+  generateText,
   WorkspaceStore,
   SessionStore,
   type WorkspaceRecord,
@@ -50,6 +51,11 @@ const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
 // vision 覆盖:强行把模型标注为支持图片输入。默认关——已实测 deepseek-v4-flash 的 API
 // 拒收 image_url(只认 text)。将来换到支持图片的模型时设 MAIN_VITE_VISION=1 开启。
 const FORCE_VISION = import.meta.env.MAIN_VITE_VISION === "1";
+
+/** API key 解析:用户设置里存的(safeStorage)优先 → 构建期 .env(dev 兜底)→ 环境变量。 */
+async function resolveApiKey(provider: string): Promise<string | undefined> {
+  return keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider));
+}
 
 type ChatStreamEvent = { type: "delta"; text: string } | { type: "done" } | { type: "error"; message: string };
 
@@ -198,21 +204,18 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     // 新记忆的情景里记下它从哪个会话学来的
     ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
   ];
-  // 优先用户在设置里存的 key(safeStorage),其次构建期 .env(dev 兜底),最后环境变量
-  const apiKeyResolver = async (provider: string): Promise<string | undefined> =>
-    keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider));
 
   // 独立验收器:同模型 + 只读工具子集 + 挑剔的评估器提示,与执行器上下文隔离。
   const evaluator = createPiEvaluator({
     model,
-    apiKeyResolver,
+    apiKeyResolver: resolveApiKey,
     systemPrompt: buildEvaluatorPrompt(),
     readonlyTools: tools.filter((t) => EVALUATOR_TOOLS.has(t.name))
   });
 
   return new PiAgentAdapter({
     model,
-    apiKeyResolver,
+    apiKeyResolver: resolveApiKey,
     evaluator,
     contractProvider: () => contractsBySession.get(sessionId),
     systemPrompt: buildSystemPrompt({
@@ -224,8 +227,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     initialMessages,
     // 注入 [session context](环境信息,决策 2:不进字节冻结的 system prompt)+ 记忆召回。
     // 经 transformContext 作为前置消息每轮注入,不写入持久 transcript。
+    // 注意:不再注入 modelLabel —— 它把"当前模型:deepseek"喂进上下文,会诱导模型把自己
+    // 当成底层 LLM 报家门,与 Akari 的助理身份冲突;且无任何代码依赖模型自知模型名。
     contextProvider: () =>
-      [buildSessionContext({ modelLabel: `${PROVIDER} · ${MODEL}` }), memory.render()]
+      [buildSessionContext(), memory.render()]
         .filter((s): s is string => Boolean(s && s.trim()))
         .join("\n\n"),
     gatekeeper: createGatekeeper({
@@ -362,10 +367,12 @@ export const agent = {
     }
     try {
       await instance.startTask({ text, conversationId: newConversationId() });
-      // 落盘:transcript 快照 + 首条用户消息自动命名
+      // 落盘:transcript 快照 + 首条用户消息自动命名(先截断占位)
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());
-      autoTitle(sessions, sessionId, text);
+      const placeholder = autoTitle(sessions, sessionId, text);
       broadcast("session:changed", sessions.list());
+      // 首轮:异步用 AI 升级标题,不阻塞本次回复完成
+      if (placeholder) void generateSessionTitle(sessions, sessionId, text, placeholder);
       // pi 出错时不抛异常,错误落在 state 里——主动捞出来让 UI 看到,而非静默结束。
       const runError = instance.lastError();
       if (runError) {
@@ -428,11 +435,62 @@ export const agent = {
   }
 };
 
-/** 会话仍叫「新会话」时,用首条用户消息生成标题。 */
-function autoTitle(sessions: SessionStore, sessionId: string, firstText: string): void {
+const DEFAULT_TITLE = "新会话";
+
+/**
+ * 会话仍叫「新会话」时,先用首条用户消息截断占位(立即生效,避免侧栏空窗/闪烁)。
+ * 返回所设的占位标题——非空表示这是首轮、随后可异步用 AI 升级标题;否则返回 undefined。
+ */
+function autoTitle(sessions: SessionStore, sessionId: string, firstText: string): string | undefined {
   const rec = sessions.list().find((s) => s.id === sessionId);
-  if (rec && rec.title === "新会话") {
+  if (rec && rec.title === DEFAULT_TITLE) {
     const title = firstText.trim().replace(/\s+/g, " ").slice(0, 24);
-    if (title) sessions.rename(sessionId, title);
+    if (title) {
+      sessions.rename(sessionId, title);
+      return title;
+    }
+  }
+  return undefined;
+}
+
+/** AI 标题清洗:去引号/首尾标点/空白,压成一行,限长。 */
+function sanitizeTitle(raw: string): string {
+  return raw
+    .replace(/\s+/g, " ")
+    .replace(/^["'“”‘’「」『』\s]+|["'“”‘’「」『』。.!?！？\s]+$/g, "")
+    .trim()
+    .slice(0, 20);
+}
+
+/**
+ * 首轮对话后,异步发一个独立的轻量调用让模型概括出简洁标题,原位替换占位标题。
+ * 失败/为空则保留占位;且仅当标题仍是我们刚设的占位时才替换(不覆盖期间用户的手动改名)。
+ */
+async function generateSessionTitle(
+  sessions: SessionStore,
+  sessionId: string,
+  firstText: string,
+  placeholder: string
+): Promise<void> {
+  try {
+    const model = createModel({ provider: PROVIDER, modelId: MODEL });
+    const apiKey = await resolveApiKey(PROVIDER);
+    const raw = await generateText(model, {
+      apiKey,
+      maxTokens: 32,
+      system:
+        "你是会话标题生成器。根据用户的首条消息,用中文概括其意图,生成一个简洁标题。" +
+        "要求:不超过 12 个字;不带引号、标点和前后缀;只输出标题本身,不要任何解释。",
+      prompt: firstText.slice(0, 2000)
+    });
+    const title = sanitizeTitle(raw);
+    if (!title) return;
+    const rec = sessions.list().find((s) => s.id === sessionId);
+    if (rec && rec.title === placeholder) {
+      sessions.rename(sessionId, title);
+      broadcast("session:changed", sessions.list());
+    }
+  } catch (err) {
+    console.warn(`[title] 自动生成标题失败,保留占位: ${String(err)}`);
   }
 }
