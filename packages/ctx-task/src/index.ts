@@ -34,7 +34,8 @@ import {
 } from "@pa/domain-core";
 
 export { createPiEvaluator, type PiEvaluatorDeps } from "./evaluator";
-export type { Evaluator, EvaluationRequest, Verdict } from "@pa/domain-core";
+export { createContractTool, type ContractToolDeps } from "./contract";
+export type { Evaluator, EvaluationRequest, Verdict, SprintContract } from "@pa/domain-core";
 
 // Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。
 export type { Gatekeeper, ToolCallIntent, GateDecision } from "@pa/domain-core";
@@ -137,6 +138,8 @@ export interface PiAgentAdapterDeps {
   readonly evaluator?: Evaluator;
   /** 验收不通过时自动返工的最大轮数(evaluator-optimizer 闭环)。默认 1。 */
   readonly maxEvalRetries?: number;
+  /** 取本次任务已确认的交付契约(若执行器签了 propose_contract),作为评估的验收清单。 */
+  readonly contractProvider?: () => import("@pa/domain-core").SprintContract | undefined;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
@@ -267,7 +270,8 @@ export class PiAgentAdapter {
           taskId,
           intent,
           actionLog: [...actionLog],
-          finalSummary: roundSummary.trim()
+          finalSummary: roundSummary.trim(),
+          contract: this.deps.contractProvider?.()
         });
         const willRetry = !verdict.pass && round < maxRetries && !this.aborted;
         this.deps.onEvent({

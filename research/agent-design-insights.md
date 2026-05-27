@@ -47,6 +47,8 @@
 
 ## 4. Sprint Contract + 可评分标准 —— 喂给 hero 场景「调研→产出」
 
+> **状态:已落地(2026-05-26)。** `propose_contract` 工具(ctx-task)让执行器对多步/有交付物的开放任务动手前起草「交付物 + 验收标准」,经用户内联确认/微调(ChatPane `ContractCard`)后锁定;确认的 `SprintContract` 存进会话并作为 §1 evaluator 的逐条验收清单。触发靠 system prompt 软约束(执行器自行判断)。未做:契约持久化、硬触发分类器、加权打分。
+
 `harness-design` 两个具体手法还没用:
 - **Sprint Contract**:动手前先就"交付物 + 可测的成功标准"达成一致,再实现。
 - **可评分标准(grading criteria)**:把"质量好"翻译成可评分维度(文章前端例子:design quality / originality / craft / functionality 加权),否则模型滑向 generic 默认产出。

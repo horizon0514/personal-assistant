@@ -15,7 +15,14 @@ type VerdictItem = {
   summary: string;
   retrying: boolean;
 };
-type TimelineItem = MsgItem | StepItem | VerdictItem;
+type ContractItem = {
+  kind: "contract";
+  id: string; // requestId
+  status: "awaiting" | "confirmed" | "cancelled";
+  deliverables: string[];
+  criteria: string[];
+};
+type TimelineItem = MsgItem | StepItem | VerdictItem | ContractItem;
 type JournalRow = { actionId: string; reverted: boolean };
 
 const base = (p: string): string => p.split(/[/\\]/).pop() || p;
@@ -109,6 +116,8 @@ export function ChatPane(): JSX.Element {
   useEffect(() => {
     return window.pa.domain.onEvent((ev) => {
       if (ev.type === "ActionProposed") {
+        // propose_contract 有专门的确认卡(contract:request),不再在 step 轨迹里重复一行
+        if (ev.action.tool === "propose_contract") return;
         setItems((prev) =>
           upsertAction(prev, {
             id: ev.action.id,
@@ -175,6 +184,31 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
+  // Sprint Contract:执行器动手前起草 → 弹可编辑的确认卡
+  useEffect(() => {
+    return window.pa.contract.onRequest((req) => {
+      setItems((prev) => [
+        ...prev,
+        {
+          kind: "contract",
+          id: req.requestId,
+          status: "awaiting",
+          deliverables: req.deliverables,
+          criteria: req.criteria
+        }
+      ]);
+    });
+  }, []);
+
+  const onConfirmContract = (requestId: string, deliverables: string[], criteria: string[]): void => {
+    window.pa.contract.resolve(requestId, { deliverables, criteria });
+    setItems((prev) => patchContract(prev, requestId, { status: "confirmed", deliverables, criteria }));
+  };
+  const onCancelContract = (requestId: string): void => {
+    window.pa.contract.resolve(requestId, null);
+    setItems((prev) => patchContract(prev, requestId, { status: "cancelled" }));
+  };
+
   // journal(撤销态)
   useEffect(() => {
     void window.pa.reversibility.list().then(setJournal);
@@ -240,6 +274,13 @@ export function ChatPane(): JSX.Element {
               />
             ) : it.kind === "verdict" ? (
               <VerdictRow key={it.id} item={it} />
+            ) : it.kind === "contract" ? (
+              <ContractCard
+                key={it.id}
+                item={it}
+                onConfirm={onConfirmContract}
+                onCancel={onCancelContract}
+              />
             ) : (
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
@@ -339,6 +380,109 @@ function VerdictRow({ item }: { item: VerdictItem }): JSX.Element {
         )}
       </div>
     </div>
+  );
+}
+
+/** Sprint Contract 确认卡:待确认时可编辑交付物/验收标准,确认后只读留痕。 */
+function ContractCard({
+  item,
+  onConfirm,
+  onCancel
+}: {
+  item: ContractItem;
+  onConfirm: (requestId: string, deliverables: string[], criteria: string[]) => void;
+  onCancel: (requestId: string) => void;
+}): JSX.Element {
+  const [deliverables, setDeliverables] = useState(item.deliverables.join("\n"));
+  const [criteria, setCriteria] = useState(item.criteria.join("\n"));
+  const toLines = (s: string): string[] =>
+    s
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+  if (item.status !== "awaiting") {
+    const confirmed = item.status === "confirmed";
+    return (
+      <div className="flex justify-start">
+        <div
+          className={
+            "max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " +
+            (confirmed
+              ? "text-stone-600 ring-stone-200/70 dark:text-stone-300 dark:ring-white/10"
+              : "text-stone-400 ring-stone-200/70 dark:text-stone-500 dark:ring-white/10")
+          }
+        >
+          <div className="font-medium">{confirmed ? "📋 已签约,按此交付" : "已取消契约"}</div>
+          {confirmed && (
+            <>
+              <ContractList title="交付物" items={item.deliverables} />
+              <ContractList title="验收标准" items={item.criteria} />
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[88%] rounded-xl bg-white px-3 py-2.5 text-[12.5px] text-stone-700 ring-1 ring-ember-200/70 dark:bg-ink-900 dark:text-stone-200 dark:ring-ember-500/25">
+        <div className="mb-1.5 font-medium">📋 动手前先确认这一程的交付契约</div>
+        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">交付物(每行一条)</label>
+        <textarea
+          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
+          rows={Math.max(2, item.deliverables.length)}
+          value={deliverables}
+          onChange={(e) => setDeliverables(e.target.value)}
+        />
+        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">验收标准(每行一条)</label>
+        <textarea
+          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
+          rows={Math.max(2, item.criteria.length)}
+          value={criteria}
+          onChange={(e) => setCriteria(e.target.value)}
+        />
+        <div className="flex gap-2">
+          <button
+            className="rounded-md bg-ember-500 px-3 py-1 font-medium text-ink-900 transition hover:bg-ember-400 disabled:opacity-30"
+            disabled={toLines(deliverables).length === 0}
+            onClick={() => onConfirm(item.id, toLines(deliverables), toLines(criteria))}
+          >
+            确认,开干
+          </button>
+          <button
+            className="rounded-md px-3 py-1 text-stone-500 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-400 dark:ring-white/10 dark:hover:bg-ink-800"
+            onClick={() => onCancel(item.id)}
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContractList({ title, items }: { title: string; items: string[] }): JSX.Element {
+  return (
+    <div className="mt-1">
+      <span className="text-stone-500 dark:text-stone-400">{title}:</span>
+      <ul className="list-disc space-y-0.5 pl-4">
+        {items.map((x, i) => (
+          <li key={i}>{x}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function patchContract(
+  items: TimelineItem[],
+  requestId: string,
+  patch: Partial<Omit<ContractItem, "kind" | "id">>
+): TimelineItem[] {
+  return items.map((it) =>
+    it.kind === "contract" && it.id === requestId ? { ...it, ...patch } : it
   );
 }
 
