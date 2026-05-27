@@ -62,6 +62,11 @@ export function registerIpc(): void {
       agent.resolveContract(p.requestId, p.contract)
   );
 
+  // ask_user:用户对提问卡的回答
+  ipcMain.on("ask:resolve", (_e, p: { requestId: string; answer: string }) =>
+    agent.resolveAsk(p.requestId, p.answer)
+  );
+
   // Reversibility:journal / 撤销
   ipcMain.handle("reversibility:list", () => agent.listJournal());
   ipcMain.handle("reversibility:undoLast", () => agent.undoLast());
