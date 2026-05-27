@@ -475,6 +475,13 @@ export class BrowserManager implements BrowserController {
     }
   }
 
+  /** 在可见 webview 里打开 URL 并读正文:供需登录/验证或用户想亲自看页面时用(与后台 fetch 相对)。 */
+  async open(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+    const wc = await this.navigate(url, signal);
+    await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
+    return this.readReadable(wc);
+  }
+
   /** 读当前 webview 正在显示的页面(用户可能手动导航过来的),不触发导航。 */
   async current(signal?: AbortSignal): Promise<FetchedPage> {
     const wc = await this.currentWebview(signal);
