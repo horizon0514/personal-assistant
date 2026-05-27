@@ -55,6 +55,13 @@ export function registerIpc(): void {
     agent.resolveBatch(p.actionId, p.approved)
   );
 
+  // Sprint Contract:契约确认(可改)/取消
+  ipcMain.on(
+    "contract:resolve",
+    (_e, p: { requestId: string; contract: { deliverables: string[]; criteria: string[] } | null }) =>
+      agent.resolveContract(p.requestId, p.contract)
+  );
+
   // Reversibility:journal / 撤销
   ipcMain.handle("reversibility:list", () => agent.listJournal());
   ipcMain.handle("reversibility:undoLast", () => agent.undoLast());

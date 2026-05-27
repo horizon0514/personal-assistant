@@ -65,3 +65,4 @@ pnpm --filter @pa/desktop build   # 构建 desktop
 
 - 设计讨论纪要与决策树:[`research/design-discussion.md`](research/design-discussion.md)
 - Prompt cache 与压缩(pi 实测行为 + 工程取舍):[`research/prompt-cache-and-compaction.md`](research/prompt-cache-and-compaction.md)
+- Agent 设计启示(对照 Anthropic 两篇工程文章):[`research/agent-design-insights.md`](research/agent-design-insights.md)

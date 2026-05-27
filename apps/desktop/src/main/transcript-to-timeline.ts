@@ -66,7 +66,10 @@ export function transcriptToTimeline(
       if (text.trim()) items.push({ kind: "msg", id: `m${msgCount++}`, role: "assistant", content: text });
 
       const calls = Array.isArray(raw.content)
-        ? (raw.content as { type?: string; id?: string; name?: string }[]).filter((b) => b.type === "toolCall")
+        ? (raw.content as { type?: string; id?: string; name?: string }[]).filter(
+            // propose_contract 在 live 有专门确认卡,轨迹里不重复呈现(与实时一致)
+            (b) => b.type === "toolCall" && b.name !== "propose_contract"
+          )
         : [];
       if (calls.length) {
         const stepId = `step-${stepCount}`;

@@ -61,6 +61,13 @@ export interface ApprovalRequest {
   args: Record<string, unknown>;
 }
 
+/** contract:request 负载:执行器起草的待确认契约。 */
+export interface ContractRequest {
+  requestId: string;
+  deliverables: string[];
+  criteria: string[];
+}
+
 /**
  * 受控 IPC 桥。渲染层只能通过 window.pa 访问主进程能力。
  */
@@ -166,6 +173,17 @@ const api = {
     },
     resolve: (actionId: string, approved: boolean): void =>
       ipcRenderer.send("batch:resolve", { actionId, approved })
+  },
+  contract: {
+    /** 订阅契约确认请求(执行器动手前起草) */
+    onRequest: (cb: (req: ContractRequest) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: ContractRequest): void => cb(payload);
+      ipcRenderer.on("contract:request", listener);
+      return () => ipcRenderer.removeListener("contract:request", listener);
+    },
+    /** 回传用户决定:确认(可能改过)→ 传契约;取消 → 传 null */
+    resolve: (requestId: string, contract: { deliverables: string[]; criteria: string[] } | null): void =>
+      ipcRenderer.send("contract:resolve", { requestId, contract })
   },
   reversibility: {
     list: (): Promise<JournalView[]> => ipcRenderer.invoke("reversibility:list"),

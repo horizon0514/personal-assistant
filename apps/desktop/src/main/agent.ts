@@ -9,7 +9,7 @@
 import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { PiAgentAdapter, type AgentMessage } from "@pa/ctx-task";
+import { PiAgentAdapter, createPiEvaluator, createContractTool, type AgentMessage } from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
@@ -34,8 +34,14 @@ import {
 import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { BrowserManager } from "./browser-manager";
-import { newConversationId, type Capability, type DomainEvent, type RiskLevel } from "@pa/domain-core";
-import { buildSystemPrompt, buildSessionContext } from "./system-prompt";
+import {
+  newConversationId,
+  type Capability,
+  type DomainEvent,
+  type RiskLevel,
+  type SprintContract
+} from "@pa/domain-core";
+import { buildSystemPrompt, buildSessionContext, buildEvaluatorPrompt } from "./system-prompt";
 import { transcriptToTimeline, VIEWABLE_TOOLS } from "./transcript-to-timeline";
 import { keyStore } from "./key-store";
 
@@ -60,6 +66,16 @@ for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
+
+// 评估器可用的只读工具(独立核查产出用;不含记忆写入/破坏性工具)。
+const EVALUATOR_TOOLS = new Set([
+  "list_dir",
+  "read_file",
+  "find_files",
+  "grep_files",
+  "extract_document",
+  "read_current_page"
+]);
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -114,6 +130,9 @@ const browserTools = createBrowserTools(browser);
 let activeSender: WebContents | undefined;
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
 const pendingBatches = new Map<string, (approved: boolean) => void>();
+// Sprint Contract:待确认的契约请求 + 每会话已确认的契约(供评估器取用)。
+const pendingContracts = new Map<string, (contract: SprintContract | null) => void>();
+const contractsBySession = new Map<string, SprintContract>();
 
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
@@ -148,6 +167,18 @@ function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[
     sendTo("batch:request", req);
   });
 }
+/** 弹出契约确认卡,等用户确认(可改)/取消。返回确认后的契约或 null。 */
+function requestContractConfirmation(proposed: SprintContract): Promise<SprintContract | null> {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    pendingContracts.set(requestId, resolve);
+    sendTo("contract:request", {
+      requestId,
+      deliverables: [...proposed.deliverables],
+      criteria: [...proposed.criteria]
+    });
+  });
+}
 
 // ── 每 session 一个 adapter(用 transcript 播种)─────────────
 const adapters = new Map<string, PiAgentAdapter>();
@@ -165,12 +196,28 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     ...documentTools,
     ...activeBrowserTools,
     createPlanFileChangesTool(requestBatchApproval),
+    // Sprint Contract:动手前与用户确认交付物 + 验收标准;确认后存到本会话供评估器取用
+    createContractTool({
+      confirm: requestContractConfirmation,
+      onConfirmed: (contract) => contractsBySession.set(sessionId, contract)
+    }),
     // 新记忆的情景里记下它从哪个会话学来的
     ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
   ];
+
+  // 独立验收器:同模型 + 只读工具子集 + 挑剔的评估器提示,与执行器上下文隔离。
+  const evaluator = createPiEvaluator({
+    model,
+    apiKeyResolver: resolveApiKey,
+    systemPrompt: buildEvaluatorPrompt(),
+    readonlyTools: tools.filter((t) => EVALUATOR_TOOLS.has(t.name))
+  });
+
   return new PiAgentAdapter({
     model,
     apiKeyResolver: resolveApiKey,
+    evaluator,
+    contractProvider: () => contractsBySession.get(sessionId),
     systemPrompt: buildSystemPrompt({
       tools: tools.map((t) => ({ name: t.name, description: t.description })),
       guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]
@@ -188,8 +235,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
         .join("\n\n"),
     gatekeeper: createGatekeeper({
       riskOf: (call): RiskLevel =>
-        // plan_file_changes 内部自做批量审批;记忆工具按决策自动执行+可见+可逆(不审批)
-        call.tool === "plan_file_changes" || memoryToolNames.has(call.tool)
+        // plan_file_changes 内部自做批量审批;propose_contract 自带确认卡;记忆工具自动执行+可见+可逆(均不走审批)
+        call.tool === "plan_file_changes" ||
+        call.tool === "propose_contract" ||
+        memoryToolNames.has(call.tool)
           ? "ReadOnly"
           : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call),
       requestApproval
@@ -306,6 +355,7 @@ export const agent = {
   async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
+    contractsBySession.delete(sessionId); // 新任务从无契约开始;本轮若签约由 propose_contract 重新写入
     const sessions = getSessions(activeWorkspaceId);
 
     let instance: PiAgentAdapter;
@@ -354,6 +404,14 @@ export const agent = {
     if (resolve) {
       pendingBatches.delete(actionId);
       resolve(approved);
+    }
+  },
+  /** 用户对契约确认卡的回应:确认(可能改过)→ 传契约;取消 → 传 null。 */
+  resolveContract(requestId: string, contract: SprintContract | null): void {
+    const resolve = pendingContracts.get(requestId);
+    if (resolve) {
+      pendingContracts.delete(requestId);
+      resolve(contract);
     }
   },
 

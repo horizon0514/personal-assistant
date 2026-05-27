@@ -1,6 +1,6 @@
 # 现状盘点与路线规划
 
-> 更新:2026-05-22 · 配套:[`design-discussion.md`](design-discussion.md) · [`domain-model.md`](domain-model.md) · [`tech-stack.md`](tech-stack.md) · [`prompt-cache-and-compaction.md`](prompt-cache-and-compaction.md)
+> 更新:2026-05-22 · 配套:[`design-discussion.md`](design-discussion.md) · [`domain-model.md`](domain-model.md) · [`tech-stack.md`](tech-stack.md) · [`prompt-cache-and-compaction.md`](prompt-cache-and-compaction.md) · [`agent-design-insights.md`](agent-design-insights.md)
 >
 > 对账说明(2026-05-22):上一版的缺口表严重滞后于代码——Reversibility、Plan/Step、Personal Memory、Keychain、持久化、钩子接线均已落地。本版按代码重新盘点;实现明细以根目录 `TODO.md` 为准。
 

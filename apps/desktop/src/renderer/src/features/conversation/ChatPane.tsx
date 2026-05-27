@@ -7,7 +7,22 @@ import { useShell } from "../shell/store";
 
 type MsgItem = { kind: "msg"; id: string; role: "user" | "assistant"; content: string };
 type StepItem = { kind: "step" } & StepGroup;
-type TimelineItem = MsgItem | StepItem;
+type VerdictItem = {
+  kind: "verdict";
+  id: string;
+  status: "running" | "pass" | "fail";
+  issues: string[];
+  summary: string;
+  retrying: boolean;
+};
+type ContractItem = {
+  kind: "contract";
+  id: string; // requestId
+  status: "awaiting" | "confirmed" | "cancelled";
+  deliverables: string[];
+  criteria: string[];
+};
+type TimelineItem = MsgItem | StepItem | VerdictItem | ContractItem;
 type JournalRow = { actionId: string; reverted: boolean };
 
 const base = (p: string): string => p.split(/[/\\]/).pop() || p;
@@ -102,6 +117,8 @@ export function ChatPane(): JSX.Element {
   useEffect(() => {
     return window.pa.domain.onEvent((ev) => {
       if (ev.type === "ActionProposed") {
+        // propose_contract 有专门的确认卡(contract:request),不再在 step 轨迹里重复一行
+        if (ev.action.tool === "propose_contract") return;
         setItems((prev) =>
           upsertAction(prev, {
             id: ev.action.id,
@@ -116,6 +133,30 @@ export function ChatPane(): JSX.Element {
         setItems((prev) => patchAction(prev, ev.actionId, { status: "done" }));
       } else if (ev.type === "ActionFailed") {
         setItems((prev) => patchAction(prev, ev.actionId, { status: "failed", error: ev.error }));
+      } else if (ev.type === "EvaluationStarted") {
+        setItems((prev) =>
+          upsertVerdict(prev, {
+            id: `verdict:${ev.taskId}:${ev.round}`,
+            status: "running",
+            issues: [],
+            summary: "",
+            retrying: false
+          })
+        );
+      } else if (ev.type === "EvaluationCompleted") {
+        setItems((prev) => {
+          const next = upsertVerdict(prev, {
+            id: `verdict:${ev.taskId}:${ev.round}`,
+            status: ev.verdict === "pass" ? "pass" : "fail",
+            issues: ev.issues,
+            summary: ev.summary,
+            retrying: ev.retrying
+          });
+          // 自动返工:补一个空 assistant 气泡,让返工的回答落在验收结论之后
+          return ev.retrying
+            ? [...next, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }]
+            : next;
+        });
       }
     });
   }, []);
@@ -143,6 +184,31 @@ export function ChatPane(): JSX.Element {
       setItems((prev) => patchAction(prev, res.actionId, { resultBody: res.body }));
     });
   }, []);
+
+  // Sprint Contract:执行器动手前起草 → 弹可编辑的确认卡
+  useEffect(() => {
+    return window.pa.contract.onRequest((req) => {
+      setItems((prev) => [
+        ...prev,
+        {
+          kind: "contract",
+          id: req.requestId,
+          status: "awaiting",
+          deliverables: req.deliverables,
+          criteria: req.criteria
+        }
+      ]);
+    });
+  }, []);
+
+  const onConfirmContract = (requestId: string, deliverables: string[], criteria: string[]): void => {
+    window.pa.contract.resolve(requestId, { deliverables, criteria });
+    setItems((prev) => patchContract(prev, requestId, { status: "confirmed", deliverables, criteria }));
+  };
+  const onCancelContract = (requestId: string): void => {
+    window.pa.contract.resolve(requestId, null);
+    setItems((prev) => patchContract(prev, requestId, { status: "cancelled" }));
+  };
 
   // journal(撤销态)
   useEffect(() => {
@@ -209,6 +275,15 @@ export function ChatPane(): JSX.Element {
                 revertedIds={revertedIds}
                 onUndo={() => void window.pa.reversibility.undoLast()}
                 onView={(art) => openArtifact({ id: art.id, kind: "text", title: art.title, body: art.body })}
+              />
+            ) : it.kind === "verdict" ? (
+              <VerdictRow key={it.id} item={it} />
+            ) : it.kind === "contract" ? (
+              <ContractCard
+                key={it.id}
+                item={it}
+                onConfirm={onConfirmContract}
+                onCancel={onCancelContract}
               />
             ) : (
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
@@ -277,6 +352,155 @@ export function ChatPane(): JSX.Element {
   );
 }
 
+/** 独立验收结论行(执行后核查;不持久化,仅本次会话可见)。 */
+function VerdictRow({ item }: { item: VerdictItem }): JSX.Element {
+  const label =
+    item.status === "running"
+      ? "独立验收中…"
+      : item.status === "pass"
+        ? "已独立验收"
+        : item.retrying
+          ? `验收发现 ${item.issues.length} 处问题,正在自动返工…`
+          : `验收发现 ${item.issues.length} 处问题`;
+  const tone =
+    item.status === "pass"
+      ? "text-emerald-700 ring-emerald-200/70 dark:text-emerald-300 dark:ring-emerald-500/20"
+      : item.status === "fail"
+        ? "text-amber-700 ring-amber-200/70 dark:text-amber-300 dark:ring-amber-500/20"
+        : "text-stone-500 ring-stone-200/70 dark:text-stone-400 dark:ring-white/10";
+  return (
+    <div className="flex justify-start">
+      <div className={"max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " + tone}>
+        <div className="flex items-center gap-1.5 font-medium">
+          <span>{item.status === "pass" ? "✓" : item.status === "fail" ? "⚠" : "○"}</span>
+          <span>{label}</span>
+        </div>
+        {item.summary && <p className="mt-1 text-stone-600 dark:text-stone-300">{item.summary}</p>}
+        {item.issues.length > 0 && (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-stone-600 dark:text-stone-300">
+            {item.issues.map((iss, i) => (
+              <li key={i}>{iss}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Sprint Contract 确认卡:待确认时可编辑交付物/验收标准,确认后只读留痕。 */
+function ContractCard({
+  item,
+  onConfirm,
+  onCancel
+}: {
+  item: ContractItem;
+  onConfirm: (requestId: string, deliverables: string[], criteria: string[]) => void;
+  onCancel: (requestId: string) => void;
+}): JSX.Element {
+  const [deliverables, setDeliverables] = useState(item.deliverables.join("\n"));
+  const [criteria, setCriteria] = useState(item.criteria.join("\n"));
+  const toLines = (s: string): string[] =>
+    s
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+  if (item.status !== "awaiting") {
+    const confirmed = item.status === "confirmed";
+    return (
+      <div className="flex justify-start">
+        <div
+          className={
+            "max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " +
+            (confirmed
+              ? "text-stone-600 ring-stone-200/70 dark:text-stone-300 dark:ring-white/10"
+              : "text-stone-400 ring-stone-200/70 dark:text-stone-500 dark:ring-white/10")
+          }
+        >
+          <div className="font-medium">{confirmed ? "📋 已签约,按此交付" : "已取消契约"}</div>
+          {confirmed && (
+            <>
+              <ContractList title="交付物" items={item.deliverables} />
+              <ContractList title="验收标准" items={item.criteria} />
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[88%] rounded-xl bg-white px-3 py-2.5 text-[12.5px] text-stone-700 ring-1 ring-ember-200/70 dark:bg-ink-900 dark:text-stone-200 dark:ring-ember-500/25">
+        <div className="mb-1.5 font-medium">📋 动手前先确认这一程的交付契约</div>
+        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">交付物(每行一条)</label>
+        <textarea
+          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
+          rows={Math.max(2, item.deliverables.length)}
+          value={deliverables}
+          onChange={(e) => setDeliverables(e.target.value)}
+        />
+        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">验收标准(每行一条)</label>
+        <textarea
+          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
+          rows={Math.max(2, item.criteria.length)}
+          value={criteria}
+          onChange={(e) => setCriteria(e.target.value)}
+        />
+        <div className="flex gap-2">
+          <button
+            className="rounded-md bg-ember-500 px-3 py-1 font-medium text-ink-900 transition hover:bg-ember-400 disabled:opacity-30"
+            disabled={toLines(deliverables).length === 0}
+            onClick={() => onConfirm(item.id, toLines(deliverables), toLines(criteria))}
+          >
+            确认,开干
+          </button>
+          <button
+            className="rounded-md px-3 py-1 text-stone-500 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-400 dark:ring-white/10 dark:hover:bg-ink-800"
+            onClick={() => onCancel(item.id)}
+          >
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ContractList({ title, items }: { title: string; items: string[] }): JSX.Element {
+  return (
+    <div className="mt-1">
+      <span className="text-stone-500 dark:text-stone-400">{title}:</span>
+      <ul className="list-disc space-y-0.5 pl-4">
+        {items.map((x, i) => (
+          <li key={i}>{x}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function patchContract(
+  items: TimelineItem[],
+  requestId: string,
+  patch: Partial<Omit<ContractItem, "kind" | "id">>
+): TimelineItem[] {
+  return items.map((it) =>
+    it.kind === "contract" && it.id === requestId ? { ...it, ...patch } : it
+  );
+}
+
+function upsertVerdict(items: TimelineItem[], v: Omit<VerdictItem, "kind">): TimelineItem[] {
+  const idx = items.findIndex((it) => it.kind === "verdict" && it.id === v.id);
+  if (idx >= 0) {
+    const next = items.slice();
+    next[idx] = { kind: "verdict", ...v };
+    return next;
+  }
+  return [...items, { kind: "verdict", ...v }];
+}
+
 function Dots(): JSX.Element {
   return (
     <span className="inline-flex gap-1">
@@ -289,7 +513,7 @@ function Dots(): JSX.Element {
 
 /** 渲染单元:把连续的 step 块合并成「一轮」,交给 TurnTrace 收成 live 行 / 折叠 chip */
 type TurnUnit = { kind: "turn"; key: string; groups: StepGroup[] };
-type RenderUnit = MsgItem | TurnUnit;
+type RenderUnit = MsgItem | VerdictItem | ContractItem | TurnUnit;
 
 function groupTimeline(items: TimelineItem[]): RenderUnit[] {
   const out: RenderUnit[] = [];
