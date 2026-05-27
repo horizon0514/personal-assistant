@@ -141,7 +141,7 @@ export function createBrowserTools(controller: BrowserController): AgentTool<any
     name: "web_fetch",
     label: "抓取网页",
     description:
-      "用内置浏览器打开一个网页并提取可读正文。需登录的页面会在可见浏览器里提示登录,登录态本地持久留存。",
+      "用内置浏览器在后台打开一个网页并提取可读正文,可安全地并发调用多次抓多页。与可见浏览器共用登录态,已登录的站点直接可读;需重新登录的页面会返回登录/验证页正文,此时让用户在可见浏览器里登录一次(登录态本地持久留存)即可重试。",
     parameters: fetchParams,
     execute: async (_id, { url }, signal) => pageResult(await controller.fetch(url, signal))
   };

@@ -3,22 +3,34 @@
  *
  * 形态:渲染层 ArtifactPanel 里挂一个 <webview>(DOM 元素,天然待在面板区域,无 z-order /
  * 绘制时序 / bounds 同步问题)。主进程通过 web-contents-created 拿到该 webview 的 webContents,
- * 用它 loadURL + executeJavaScript 来驱动导航与抓取。
+ * 用它 loadURL + executeJavaScript 来驱动导航与抓取。交互类工具(search/click/type/
+ * screenshot/current)都作用在这一个可见页面上——透明即监督。
+ *
+ * 例外:web_fetch 是无状态的只读正文抽取,且常被 LLM 并发调用。若也共用那个可见 webview,
+ * 并发 loadURL 会互相中断、各自读到错页。故 fetch 每次开一个隐藏 BrowserWindow(共用同一
+ * persist:research partition 保留登录态),抓完即销毁,真正并行(见 fetch())。
  *
  * 架构见 research/design-discussion.md「内置浏览器调研」:驱动 Electron 自带 Chromium,
  * 可见、非 headless、持久 partition(登录态留存),不接管用户 Chrome、不用搜索 API。
  */
-import { app, type WebContents } from "electron";
+import { app, BrowserWindow, type WebContents } from "electron";
 import type { BrowserController, FetchedPage, SearchHit } from "@pa/cap-browser";
 import { getMainWebContents } from "./main-window";
 
 const LOAD_TIMEOUT_MS = 30_000;
 /** 搜索引擎:Bing 对真实浏览器抓取稳定、反爬温和。 */
 const SEARCH_URL = (q: string): string => `https://www.bing.com/search?q=${encodeURIComponent(q)}`;
+/** 隐藏抓取窗口与可见 <webview> 共用此 partition,登录态(cookies)互通。 */
+const RESEARCH_PARTITION = "persist:research";
+/** 隐藏抓取窗口的并发上限:web_fetch 常被并发调用,无界开窗会吃满内存,故设信号量排队。 */
+const MAX_CONCURRENT_FETCH = 6;
 
 export class BrowserManager implements BrowserController {
   private webview: WebContents | undefined;
   private waiters: ((wc: WebContents) => void)[] = [];
+  /** 抓取信号量:可用槽位数 + 等待者队列。 */
+  private fetchSlots = MAX_CONCURRENT_FETCH;
+  private fetchQueue: (() => void)[] = [];
 
   constructor() {
     // 渲染层挂载 <webview> 时,这里拿到它的 webContents
@@ -45,9 +57,15 @@ export class BrowserManager implements BrowserController {
     });
   }
 
-  /** 导航并等待加载完成(带超时 + 中断)。 */
+  /** 导航可见 webview 并等待加载完成(带超时 + 中断)。 */
   private async navigate(url: string, signal?: AbortSignal): Promise<WebContents> {
     const wc = await this.ensureWebview();
+    await this.loadUrl(wc, url, signal);
+    return wc;
+  }
+
+  /** 在指定 webContents 上加载 URL,等待完成(带超时 + 中断)。可见 webview 与隐藏抓取窗口共用。 */
+  private async loadUrl(wc: WebContents, url: string, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw new Error("已取消");
     const load = wc.loadURL(url).catch((err: { code?: string }) => {
       if (err?.code && err.code !== "ERR_ABORTED") throw err;
@@ -60,7 +78,7 @@ export class BrowserManager implements BrowserController {
     const aborted = new Promise<never>((_, reject) => {
       if (!signal) return;
       onAbort = (): void => {
-        wc.stop();
+        if (!wc.isDestroyed()) wc.stop();
         reject(new Error("已取消"));
       };
       signal.addEventListener("abort", onAbort, { once: true });
@@ -71,7 +89,6 @@ export class BrowserManager implements BrowserController {
       if (timer) clearTimeout(timer);
       if (signal && onAbort) signal.removeEventListener("abort", onAbort);
     }
-    return wc;
   }
 
   async search(query: string, limit: number, signal?: AbortSignal): Promise<SearchHit[]> {
@@ -358,10 +375,53 @@ export class BrowserManager implements BrowserController {
     )) as FetchedPage;
   }
 
+  /** 取一个抓取槽位(满了就排队),released 后才返回。 */
+  private acquireFetchSlot(): Promise<void> {
+    if (this.fetchSlots > 0) {
+      this.fetchSlots--;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => this.fetchQueue.push(resolve));
+  }
+
+  /** 归还槽位:有等待者则直接转交(不回填计数),否则计数 +1。 */
+  private releaseFetchSlot(): void {
+    const next = this.fetchQueue.shift();
+    if (next) next();
+    else this.fetchSlots++;
+  }
+
+  /**
+   * 抓取单页正文。与 search/click/type 等交互工具不同,web_fetch 是无状态的只读抽取,
+   * 且常被 LLM 并发调用——若共用那一个可见 webview,并发 loadURL 会互相中断、各自读到错页。
+   * 这里每次抓取开一个**隐藏 BrowserWindow**(共用 persist:research partition 保留登录态),
+   * 抓完即销毁,从而真正并行;并发数受 MAX_CONCURRENT_FETCH 信号量约束,避免开窗吃满内存。
+   */
   async fetch(url: string, signal?: AbortSignal): Promise<FetchedPage> {
-    const wc = await this.navigate(url, signal);
-    await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
-    return this.readReadable(wc);
+    if (signal?.aborted) throw new Error("已取消");
+    await this.acquireFetchSlot();
+    let win: BrowserWindow | undefined;
+    try {
+      if (signal?.aborted) throw new Error("已取消");
+      win = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          partition: RESEARCH_PARTITION, // 与可见 webview 共用登录态
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          backgroundThrottling: false // 隐藏窗口默认会被节流,关掉以保证及时加载
+        }
+      });
+      const wc = win.webContents;
+      wc.setAudioMuted(true);
+      await this.loadUrl(wc, url, signal);
+      await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
+      return await this.readReadable(wc);
+    } finally {
+      if (win && !win.isDestroyed()) win.destroy();
+      this.releaseFetchSlot();
+    }
   }
 
   /** 读当前 webview 正在显示的页面(用户可能手动导航过来的),不触发导航。 */
