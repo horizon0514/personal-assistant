@@ -6,8 +6,9 @@
  * 破坏性工具(rename/move/delete/write)留待接入 Reversibility 后再开。
  */
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { Type, type Static } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
@@ -160,15 +161,33 @@ const grepFilesTool: AgentTool<typeof grepFilesParams> = {
 
 const writeFileParams = Type.Object({
   path: Type.String({ description: "要写入的文件绝对路径" }),
-  content: Type.String({ description: "写入的完整文本内容(会覆盖原文件)" })
+  content: Type.String({ description: "写入的完整文本内容" }),
+  overwrite: Type.Optional(
+    Type.Boolean({
+      description:
+        "目标已存在时是否覆盖原文件。默认 false:自动改用带版本号的新文件名(如「报告 (2).md」),不动原文件。只有用户明确要替换/更新原文件时才传 true。"
+    })
+  )
 });
+
+/** 在同目录里找一个未被占用的带版本号文件名:「stem (2).ext」「stem (3).ext」… */
+function versionedPath(path: string): string {
+  const dir = dirname(path);
+  const ext = extname(path);
+  const stem = basename(path, ext);
+  for (let n = 2; ; n++) {
+    const candidate = join(dir, `${stem} (${n})${ext}`);
+    if (!existsSync(candidate)) return candidate;
+  }
+}
 
 const writeFileTool: AgentTool<typeof writeFileParams> = {
   name: "write_file",
   label: "写入文件",
-  description: "把文本内容写入文件(会创建或覆盖,目标目录不存在时自动创建)。有副作用,需审批。",
+  description:
+    "把文本内容写入文件。目标已存在且未传 overwrite 时,自动改用带版本号的新文件名(不覆盖原文件)并回报最终路径;需要原地替换/更新原文件时才传 overwrite:true。目标目录不存在会自动创建。有副作用,需审批。",
   parameters: writeFileParams,
-  execute: async (_id, { path, content }) => {
+  execute: async (_id, { path, content, overwrite }) => {
     // 捕获 before 状态用于回滚:存在则记旧内容,不存在则记"新建"
     let prevContent: string | undefined;
     let existed = true;
@@ -177,14 +196,27 @@ const writeFileTool: AgentTool<typeof writeFileParams> = {
     } catch {
       existed = false;
     }
-    await mkdir(dirname(path), { recursive: true }); // 自动创建父目录
-    await writeFile(path, content, "utf8");
+
+    // 同名已存在且未要求覆盖:自动改名加版本号,避免粗暴覆盖(写的是全新文件)
+    let target = path;
+    let renamed = false;
+    if (existed && !overwrite) {
+      target = versionedPath(path);
+      renamed = true;
+      existed = false;
+      prevContent = undefined;
+    }
+
+    await mkdir(dirname(target), { recursive: true }); // 自动创建父目录
+    await writeFile(target, content, "utf8");
     const reversal = existed
-      ? { kind: "fs.restore", path, prevContent }
-      : { kind: "fs.delete-created", path };
-    return textResult(`已写入 ${path}(${Buffer.byteLength(content)} 字节)`, {
-      path,
+      ? { kind: "fs.restore", path: target, prevContent }
+      : { kind: "fs.delete-created", path: target };
+    const note = renamed ? `(同名「${basename(path)}」已存在,已改名避免覆盖;要替换原文件请带 overwrite:true)` : "";
+    return textResult(`已写入 ${target}(${Buffer.byteLength(content)} 字节)${note}`, {
+      path: target,
       bytes: Buffer.byteLength(content),
+      renamedFrom: renamed ? path : undefined,
       reversal
     });
   }

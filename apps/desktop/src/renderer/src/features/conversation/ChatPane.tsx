@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { ArrowUp, HelpCircle, Square } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { TurnTrace, type ActionRow, type StepGroup } from "./StepTrace";
 import { EmptyState } from "./EmptyState";
@@ -22,7 +22,15 @@ type ContractItem = {
   deliverables: string[];
   criteria: string[];
 };
-type TimelineItem = MsgItem | StepItem | VerdictItem | ContractItem;
+type AskItem = {
+  kind: "ask";
+  id: string; // requestId
+  question: string;
+  options: string[];
+  status: "awaiting" | "answered";
+  answer?: string;
+};
+type TimelineItem = MsgItem | StepItem | VerdictItem | ContractItem | AskItem;
 type JournalRow = { actionId: string; reverted: boolean };
 
 const base = (p: string): string => p.split(/[/\\]/).pop() || p;
@@ -117,8 +125,8 @@ export function ChatPane(): JSX.Element {
   useEffect(() => {
     return window.pa.domain.onEvent((ev) => {
       if (ev.type === "ActionProposed") {
-        // propose_contract 有专门的确认卡(contract:request),不再在 step 轨迹里重复一行
-        if (ev.action.tool === "propose_contract") return;
+        // propose_contract / ask_user 有专门的交互卡,不再在 step 轨迹里重复一行
+        if (ev.action.tool === "propose_contract" || ev.action.tool === "ask_user") return;
         setItems((prev) =>
           upsertAction(prev, {
             id: ev.action.id,
@@ -210,6 +218,23 @@ export function ChatPane(): JSX.Element {
     setItems((prev) => patchContract(prev, requestId, { status: "cancelled" }));
   };
 
+  // ask_user:执行中需用户拍板 → 弹提问卡(暂停 agent 直到回答)
+  useEffect(() => {
+    return window.pa.ask.onRequest((req) => {
+      setItems((prev) => [
+        ...prev,
+        { kind: "ask", id: req.requestId, question: req.question, options: req.options, status: "awaiting" }
+      ]);
+    });
+  }, []);
+
+  const onAnswer = (requestId: string, answer: string): void => {
+    const text = answer.trim();
+    if (!text) return;
+    window.pa.ask.resolve(requestId, text);
+    setItems((prev) => patchAsk(prev, requestId, { status: "answered", answer: text }));
+  };
+
   // journal(撤销态)
   useEffect(() => {
     void window.pa.reversibility.list().then(setJournal);
@@ -265,8 +290,10 @@ export function ChatPane(): JSX.Element {
       <div ref={scrollRef} className="flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[760px] space-y-4 px-5 py-6">
           {empty && <EmptyState onPick={pickExample} />}
-          {groupTimeline(items).map((it) =>
-            it.kind === "turn" ? (
+          {groupTimeline(items).map((it, idx, arr) =>
+            // 空的 assistant 气泡:仅当它是队尾且仍在流式时显示「思考中」(Dots);否则(已被 step
+            // 或后续文字接管)直接跳过,避免重建时不存在、实时却冒出空气泡
+            it.kind === "msg" && it.role === "assistant" && !it.content && !(streaming && idx === arr.length - 1) ? null : it.kind === "turn" ? (
               <TurnTrace
                 key={it.groups[0]?.stepId ?? it.key}
                 groups={it.groups}
@@ -285,6 +312,8 @@ export function ChatPane(): JSX.Element {
                 onConfirm={onConfirmContract}
                 onCancel={onCancelContract}
               />
+            ) : it.kind === "ask" ? (
+              <AskCard key={it.id} item={it} onAnswer={onAnswer} />
             ) : (
               <div key={it.id} className={it.role === "user" ? "flex justify-end" : "flex justify-start"}>
                 <div
@@ -481,6 +510,77 @@ function ContractList({ title, items }: { title: string; items: string[] }): JSX
   );
 }
 
+/** ask_user 提问卡:待回答时给选项按钮 + 自由输入;回答后只读留痕。 */
+function AskCard({
+  item,
+  onAnswer
+}: {
+  item: AskItem;
+  onAnswer: (requestId: string, answer: string) => void;
+}): JSX.Element {
+  const [text, setText] = useState("");
+
+  if (item.status === "answered") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] text-stone-600 ring-1 ring-stone-200/70 dark:bg-ink-900 dark:text-stone-300 dark:ring-white/10">
+          <div className="flex items-center gap-1.5 font-medium">
+            <HelpCircle size={13} className="text-stone-400" />
+            <span>{item.question}</span>
+          </div>
+          <p className="mt-1 text-stone-500 dark:text-stone-400">你的回答:{item.answer}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[88%] rounded-xl bg-white px-3 py-2.5 text-[12.5px] text-stone-700 ring-1 ring-ember-200/70 dark:bg-ink-900 dark:text-stone-200 dark:ring-ember-500/25">
+        <div className="mb-2 flex items-center gap-1.5 font-medium">
+          <HelpCircle size={14} className="text-ember-500" />
+          <span>{item.question}</span>
+        </div>
+        {item.options.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {item.options.map((opt, i) => (
+              <button
+                key={i}
+                className="rounded-md bg-ember-500 px-2.5 py-1 text-[11.5px] font-medium text-ink-900 transition hover:bg-ember-400"
+                onClick={() => onAnswer(item.id, opt)}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <textarea
+            rows={1}
+            className="max-h-24 flex-1 resize-none rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
+            placeholder={item.options.length > 0 ? "或自己补充…" : "输入你的回答…"}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onAnswer(item.id, text);
+              }
+            }}
+          />
+          <button
+            className="rounded-md bg-stone-100 px-3 py-1 text-[11.5px] text-stone-600 transition hover:bg-stone-200 disabled:opacity-30 dark:bg-ink-700 dark:text-stone-200 dark:hover:bg-ink-600"
+            disabled={text.trim() === ""}
+            onClick={() => onAnswer(item.id, text)}
+          >
+            回答
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function patchContract(
   items: TimelineItem[],
   requestId: string,
@@ -489,6 +589,14 @@ function patchContract(
   return items.map((it) =>
     it.kind === "contract" && it.id === requestId ? { ...it, ...patch } : it
   );
+}
+
+function patchAsk(
+  items: TimelineItem[],
+  requestId: string,
+  patch: Partial<Omit<AskItem, "kind" | "id">>
+): TimelineItem[] {
+  return items.map((it) => (it.kind === "ask" && it.id === requestId ? { ...it, ...patch } : it));
 }
 
 function upsertVerdict(items: TimelineItem[], v: Omit<VerdictItem, "kind">): TimelineItem[] {
@@ -513,7 +621,7 @@ function Dots(): JSX.Element {
 
 /** 渲染单元:把连续的 step 块合并成「一轮」,交给 TurnTrace 收成 live 行 / 折叠 chip */
 type TurnUnit = { kind: "turn"; key: string; groups: StepGroup[] };
-type RenderUnit = MsgItem | VerdictItem | ContractItem | TurnUnit;
+type RenderUnit = MsgItem | VerdictItem | ContractItem | AskItem | TurnUnit;
 
 function groupTimeline(items: TimelineItem[]): RenderUnit[] {
   const out: RenderUnit[] = [];
@@ -529,18 +637,20 @@ function groupTimeline(items: TimelineItem[]): RenderUnit[] {
   return out;
 }
 
+/**
+ * 把流式增量并进当前 assistant 气泡。
+ * 关键:只追加到「队尾」的 assistant 气泡;若队尾已是 step/卡片(中间穿插了工具调用),
+ * 则另起一个新气泡 —— 让实时分段与磁盘重建(每条 assistant 消息 = 一段文字 + 一组 step)一致,
+ * 而不是把整轮文字黏成一坨。
+ */
 function appendToLastAssistant(items: TimelineItem[], text: string): TimelineItem[] {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (!it) continue;
-    if (it.kind === "msg" && it.role === "assistant") {
-      const next = items.slice();
-      next[i] = { ...it, content: it.content + text };
-      return next;
-    }
-    if (it.kind === "msg" && it.role === "user") break;
+  const last = items[items.length - 1];
+  if (last && last.kind === "msg" && last.role === "assistant") {
+    const next = items.slice();
+    next[items.length - 1] = { ...last, content: last.content + text };
+    return next;
   }
-  return items;
+  return [...items, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: text }];
 }
 
 /** 按 stepId 归组插入/更新动作:已有 step 块则追加,否则新建带递增序号的 step 块 */
