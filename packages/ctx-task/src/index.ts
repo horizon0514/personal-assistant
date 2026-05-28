@@ -35,6 +35,7 @@ import {
 
 export { createPiEvaluator, type PiEvaluatorDeps } from "./evaluator";
 export { createContractTool, type ContractToolDeps } from "./contract";
+export { createAskUserTool, type AskUserToolDeps } from "./ask-user";
 export type { Evaluator, EvaluationRequest, Verdict, SprintContract } from "@pa/domain-core";
 
 // Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。

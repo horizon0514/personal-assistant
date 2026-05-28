@@ -10,7 +10,13 @@ import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { PiAgentAdapter, createPiEvaluator, createContractTool, type AgentMessage } from "@pa/ctx-task";
+import {
+  PiAgentAdapter,
+  createPiEvaluator,
+  createContractTool,
+  createAskUserTool,
+  type AgentMessage
+} from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
 import { OperationJournal } from "@pa/ctx-reversibility";
@@ -189,6 +195,8 @@ const pendingBatches = new Map<string, (approved: boolean) => void>();
 // Sprint Contract:待确认的契约请求 + 每会话已确认的契约(供评估器取用)。
 const pendingContracts = new Map<string, (contract: SprintContract | null) => void>();
 const contractsBySession = new Map<string, SprintContract>();
+// ask_user:待用户回答的提问请求(requestId → resolve)。
+const pendingAsks = new Map<string, (answer: string) => void>();
 
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
@@ -235,6 +243,14 @@ function requestContractConfirmation(proposed: SprintContract): Promise<SprintCo
     });
   });
 }
+/** 弹出提问卡,等用户作答(自由输入或选项)。返回用户回答文本。 */
+function requestUserAnswer(question: string, options: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    pendingAsks.set(requestId, resolve);
+    sendTo("ask:request", { requestId, question, options: [...options] });
+  });
+}
 
 // ── 每 session 一个 adapter(用 transcript 播种)─────────────
 const adapters = new Map<string, PiAgentAdapter>();
@@ -273,7 +289,9 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     createContractTool({
       confirm: requestContractConfirmation,
       onConfirmed: (contract) => contractsBySession.set(sessionId, contract)
-    })
+    }),
+    // 执行中遇到需用户拍板的岔路:提问并暂停等回答(避免擅自决定 / 误判任务已完成)
+    createAskUserTool({ ask: requestUserAnswer })
   ];
   /** 全集:评估器筛选只读子集用 + 适配器初始 tools(send 里会被本轮选择结果覆盖)。 */
   const allTools: AgentTool[] = [...catalog.flatMap((g) => g.tools), ...alwaysOnExtras];
@@ -325,9 +343,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
         .join("\n\n"),
     gatekeeper: createGatekeeper({
       riskOf: (call): RiskLevel =>
-        // plan_file_changes 内部自做批量审批;propose_contract 自带确认卡;记忆工具自动执行+可见+可逆(均不走审批)
+        // plan_file_changes 内部自做批量审批;propose_contract/ask_user 自带交互卡;记忆工具自动执行+可见+可逆(均不走审批)
         call.tool === "plan_file_changes" ||
         call.tool === "propose_contract" ||
+        call.tool === "ask_user" ||
         memoryToolNames.has(call.tool)
           ? "ReadOnly"
           : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call),
@@ -521,6 +540,14 @@ export const agent = {
     if (resolve) {
       pendingContracts.delete(requestId);
       resolve(contract);
+    }
+  },
+  /** 用户对提问卡的回答 → 喂回执行器,继续本轮。 */
+  resolveAsk(requestId: string, answer: string): void {
+    const resolve = pendingAsks.get(requestId);
+    if (resolve) {
+      pendingAsks.delete(requestId);
+      resolve(answer);
     }
   },
 

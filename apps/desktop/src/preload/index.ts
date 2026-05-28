@@ -68,6 +68,13 @@ export interface ContractRequest {
   criteria: string[];
 }
 
+/** ask:request 负载:执行器向用户提出的待回答问题。 */
+export interface AskRequest {
+  requestId: string;
+  question: string;
+  options: string[];
+}
+
 /**
  * 受控 IPC 桥。渲染层只能通过 window.pa 访问主进程能力。
  */
@@ -184,6 +191,17 @@ const api = {
     /** 回传用户决定:确认(可能改过)→ 传契约;取消 → 传 null */
     resolve: (requestId: string, contract: { deliverables: string[]; criteria: string[] } | null): void =>
       ipcRenderer.send("contract:resolve", { requestId, contract })
+  },
+  ask: {
+    /** 订阅执行器的提问请求(执行中需用户拍板) */
+    onRequest: (cb: (req: AskRequest) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: AskRequest): void => cb(payload);
+      ipcRenderer.on("ask:request", listener);
+      return () => ipcRenderer.removeListener("ask:request", listener);
+    },
+    /** 回传用户的回答(自由输入或所选项) */
+    resolve: (requestId: string, answer: string): void =>
+      ipcRenderer.send("ask:resolve", { requestId, answer })
   },
   reversibility: {
     list: (): Promise<JournalView[]> => ipcRenderer.invoke("reversibility:list"),
