@@ -315,4 +315,13 @@ export class PiAgentAdapter {
   snapshotTranscript(): AgentMessage[] {
     return this.agent.state.messages;
   }
+
+  /**
+   * 替换本会话的工具集(渐进披露用)。pi 的 createContextSnapshot 在每次 prompt() 开头
+   * 从 state.tools 重新切片,所以**在 startTask 之前**调用本方法即可在下一轮生效。
+   * 运行中调用对当前 run 无效——当前 run 用的是已快照的工具集。
+   */
+  setTools(tools: AgentTool[]): void {
+    this.agent.state.tools = tools;
+  }
 }
