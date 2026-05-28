@@ -124,15 +124,15 @@ export interface EvaluationRequest {
   readonly actionLog: readonly { readonly tool: string; readonly ok: boolean }[];
   /** 执行器最后给用户的文字汇报 */
   readonly finalSummary: string;
-  /** 动手前与用户确认的交付契约(若签了),作为验收的客观清单 */
-  readonly contract?: SprintContract;
+  /** 动手前与用户对齐的工作计划(若对齐过),作为验收的客观清单 */
+  readonly plan?: WorkPlan;
 }
 
 /**
- * Sprint Contract —— 动手前对「交付什么 + 怎样算合格」的轻量约定(见 research/agent-design-insights.md §4)。
+ * WorkPlan —— 动手前与用户对「交付什么 + 怎样算合格」的轻量对齐(见 research/agent-design-insights.md §4)。
  * 由执行器起草、用户确认后锁定,既给执行器明确靶子,又作为评估器(§1)的客观验收清单。
  */
-export interface SprintContract {
+export interface WorkPlan {
   /** 交付物(如具体文件路径、产出形态) */
   readonly deliverables: readonly string[];
   /** 可测的验收标准(逐条,避免"做得好"这类不可验的话) */

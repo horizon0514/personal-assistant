@@ -7,18 +7,14 @@ import { useShell } from "../shell/store";
 
 type MsgItem = { kind: "msg"; id: string; role: "user" | "assistant"; content: string };
 type StepItem = { kind: "step" } & StepGroup;
-type VerdictItem = {
-  kind: "verdict";
-  id: string;
-  status: "running" | "pass" | "fail";
-  issues: string[];
-  summary: string;
-  retrying: boolean;
-};
-type ContractItem = {
-  kind: "contract";
+type PlanItem = {
+  kind: "plan";
   id: string; // requestId
-  status: "awaiting" | "confirmed" | "cancelled";
+  // awaiting:刚收到,展示三按钮
+  // awaiting-feedback:用户点了「调一下」,卡片保持可见 + 等主输入框反馈(agent 仍挂着)
+  // revised:用户已提交反馈,等新版本(留痕)
+  // confirmed/cancelled:终态,留痕
+  status: "awaiting" | "awaiting-feedback" | "revised" | "confirmed" | "cancelled";
   deliverables: string[];
   criteria: string[];
 };
@@ -30,7 +26,9 @@ type AskItem = {
   status: "awaiting" | "answered";
   answer?: string;
 };
-type TimelineItem = MsgItem | StepItem | VerdictItem | ContractItem | AskItem;
+type TimelineItem = MsgItem | StepItem | PlanItem | AskItem;
+/** 自查指示器状态:idle 隐藏;reviewing 显示"自查中…";retrying 显示"在修一些问题…"。 */
+type ReviewState = "idle" | "reviewing" | "retrying";
 type JournalRow = { actionId: string; reverted: boolean };
 
 const base = (p: string): string => p.split(/[/\\]/).pop() || p;
@@ -83,6 +81,10 @@ export function ChatPane(): JSX.Element {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [reviewState, setReviewState] = useState<ReviewState>("idle");
+  // 当前是否有 plan 在等主输入框反馈(用户点了「不对,调一下」):
+  // 有 → 下一条主输入消息作为 plan feedback 喂回工具,而非开新一轮 chat
+  const [pendingPlanFeedbackId, setPendingPlanFeedbackId] = useState<string | null>(null);
   const [journal, setJournal] = useState<JournalRow[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -115,8 +117,10 @@ export function ChatPane(): JSX.Element {
       } else if (event.type === "error") {
         setItems((prev) => appendToLastAssistant(prev, `\n\n⚠️ 出错:${event.message}`));
         setStreaming(false);
+        setReviewState("idle");
       } else if (event.type === "done") {
         setStreaming(false);
+        setReviewState("idle");
       }
     });
   }, []);
@@ -125,8 +129,8 @@ export function ChatPane(): JSX.Element {
   useEffect(() => {
     return window.pa.domain.onEvent((ev) => {
       if (ev.type === "ActionProposed") {
-        // propose_contract / ask_user 有专门的交互卡,不再在 step 轨迹里重复一行
-        if (ev.action.tool === "propose_contract" || ev.action.tool === "ask_user") return;
+        // propose_plan / ask_user 有专门的交互卡,不再在 step 轨迹里重复一行
+        if (ev.action.tool === "propose_plan" || ev.action.tool === "ask_user") return;
         setItems((prev) =>
           upsertAction(prev, {
             id: ev.action.id,
@@ -142,29 +146,17 @@ export function ChatPane(): JSX.Element {
       } else if (ev.type === "ActionFailed") {
         setItems((prev) => patchAction(prev, ev.actionId, { status: "failed", error: ev.error }));
       } else if (ev.type === "EvaluationStarted") {
-        setItems((prev) =>
-          upsertVerdict(prev, {
-            id: `verdict:${ev.taskId}:${ev.round}`,
-            status: "running",
-            issues: [],
-            summary: "",
-            retrying: false
-          })
-        );
+        // 内部质量门:不展示 verdict 详情,只在末尾显示一个轻量"自查中"指示
+        setReviewState("reviewing");
       } else if (ev.type === "EvaluationCompleted") {
-        setItems((prev) => {
-          const next = upsertVerdict(prev, {
-            id: `verdict:${ev.taskId}:${ev.round}`,
-            status: ev.verdict === "pass" ? "pass" : "fail",
-            issues: ev.issues,
-            summary: ev.summary,
-            retrying: ev.retrying
-          });
-          // 自动返工:补一个空 assistant 气泡,让返工的回答落在验收结论之后
-          return ev.retrying
-            ? [...next, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }]
-            : next;
-        });
+        if (ev.retrying) {
+          // 返工:把状态切到"在修一些问题",并补一个空 assistant 气泡让下一轮的回答落进去
+          setReviewState("retrying");
+          setItems((prev) => [...prev, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }]);
+        } else {
+          // 通过 / 已耗尽 retry:收掉指示器,pendingFinal 由 ctx-task flush 进当前 assistant 气泡
+          setReviewState("idle");
+        }
       }
     });
   }, []);
@@ -193,13 +185,13 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
-  // Sprint Contract:执行器动手前起草 → 弹可编辑的确认卡
+  // Work Plan:执行器动手前起草 → 弹可编辑的对齐卡
   useEffect(() => {
-    return window.pa.contract.onRequest((req) => {
+    return window.pa.plan.onRequest((req) => {
       setItems((prev) => [
         ...prev,
         {
-          kind: "contract",
+          kind: "plan",
           id: req.requestId,
           status: "awaiting",
           deliverables: req.deliverables,
@@ -209,13 +201,22 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
-  const onConfirmContract = (requestId: string, deliverables: string[], criteria: string[]): void => {
-    window.pa.contract.resolve(requestId, { deliverables, criteria });
-    setItems((prev) => patchContract(prev, requestId, { status: "confirmed", deliverables, criteria }));
+  const onConfirmPlan = (requestId: string, deliverables: string[], criteria: string[]): void => {
+    window.pa.plan.resolve(requestId, { kind: "confirm", plan: { deliverables, criteria } });
+    setItems((prev) => patchPlan(prev, requestId, { status: "confirmed", deliverables, criteria }));
+    if (pendingPlanFeedbackId === requestId) setPendingPlanFeedbackId(null);
   };
-  const onCancelContract = (requestId: string): void => {
-    window.pa.contract.resolve(requestId, null);
-    setItems((prev) => patchContract(prev, requestId, { status: "cancelled" }));
+  const onCancelPlan = (requestId: string): void => {
+    window.pa.plan.resolve(requestId, { kind: "cancel" });
+    setItems((prev) => patchPlan(prev, requestId, { status: "cancelled" }));
+    if (pendingPlanFeedbackId === requestId) setPendingPlanFeedbackId(null);
+  };
+  // 「不对,调一下」:不立刻 resolve agent,卡片保持可见切到 awaiting-feedback,
+  // 主输入框 hijack 下一条消息作为反馈(走 plan:resolve feedback 路径)
+  const onAdjustPlan = (requestId: string): void => {
+    setItems((prev) => patchPlan(prev, requestId, { status: "awaiting-feedback" }));
+    setPendingPlanFeedbackId(requestId);
+    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   // ask_user:执行中需用户拍板 → 弹提问卡(暂停 agent 直到回答)
@@ -266,7 +267,22 @@ export function ChatPane(): JSX.Element {
 
   const send = (textArg?: string): void => {
     const text = (textArg ?? input).trim();
-    if (!text || streaming) return;
+    if (!text) return;
+
+    // Hijack:plan 在等反馈 → 把消息喂回 plan 工具,不开新一轮 chat(agent loop 仍挂着等回应)
+    if (pendingPlanFeedbackId) {
+      const planId = pendingPlanFeedbackId;
+      window.pa.plan.resolve(planId, { kind: "feedback", text });
+      setItems((prev) => [
+        ...patchPlan(prev, planId, { status: "revised" }),
+        { kind: "msg", id: crypto.randomUUID(), role: "user", content: text }
+      ]);
+      setInput("");
+      setPendingPlanFeedbackId(null);
+      return;
+    }
+
+    if (streaming) return;
     // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
     if (!activeSessionId) sentIntoNewSession.current = true;
     setItems((prev) => [
@@ -303,14 +319,13 @@ export function ChatPane(): JSX.Element {
                 onUndo={() => void window.pa.reversibility.undoLast()}
                 onView={(art) => openArtifact({ id: art.id, kind: "text", title: art.title, body: art.body })}
               />
-            ) : it.kind === "verdict" ? (
-              <VerdictRow key={it.id} item={it} />
-            ) : it.kind === "contract" ? (
-              <ContractCard
+            ) : it.kind === "plan" ? (
+              <PlanCard
                 key={it.id}
                 item={it}
-                onConfirm={onConfirmContract}
-                onCancel={onCancelContract}
+                onConfirm={onConfirmPlan}
+                onAdjust={onAdjustPlan}
+                onCancel={onCancelPlan}
               />
             ) : it.kind === "ask" ? (
               <AskCard key={it.id} item={it} onAnswer={onAnswer} />
@@ -329,7 +344,15 @@ export function ChatPane(): JSX.Element {
                   ) : it.content ? (
                     <Markdown>{it.content}</Markdown>
                   ) : streaming ? (
-                    <Dots />
+                    <span className="inline-flex items-center gap-2">
+                      <Dots />
+                      {reviewState === "reviewing" && (
+                        <span className="text-[12px] text-stone-500 dark:text-stone-400">自查中…</span>
+                      )}
+                      {reviewState === "retrying" && (
+                        <span className="text-[12px] text-stone-500 dark:text-stone-400">在修一些问题…</span>
+                      )}
+                    </span>
                   ) : null}
                 </div>
               </div>
@@ -345,7 +368,11 @@ export function ChatPane(): JSX.Element {
               ref={inputRef}
               rows={1}
               className="max-h-32 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13.5px] text-stone-700 outline-none placeholder:text-stone-500 dark:text-stone-100 dark:placeholder:text-stone-500"
-              placeholder="发消息给助理…  (Enter 发送 · Shift+Enter 换行)"
+              placeholder={
+                pendingPlanFeedbackId
+                  ? "告诉它怎么调上面的计划…  (Enter 发送)"
+                  : "发消息给助理…  (Enter 发送 · Shift+Enter 换行)"
+              }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -355,7 +382,7 @@ export function ChatPane(): JSX.Element {
                 }
               }}
             />
-            {streaming ? (
+            {streaming && !pendingPlanFeedbackId ? (
               <button
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-700 text-white transition hover:bg-stone-800 dark:bg-ink-700 dark:hover:bg-ink-600"
                 onClick={stop}
@@ -381,123 +408,82 @@ export function ChatPane(): JSX.Element {
   );
 }
 
-/** 独立验收结论行(执行后核查;不持久化,仅本次会话可见)。 */
-function VerdictRow({ item }: { item: VerdictItem }): JSX.Element {
-  const label =
-    item.status === "running"
-      ? "独立验收中…"
-      : item.status === "pass"
-        ? "已独立验收"
-        : item.retrying
-          ? `验收发现 ${item.issues.length} 处问题,正在自动返工…`
-          : `验收发现 ${item.issues.length} 处问题`;
-  const tone =
-    item.status === "pass"
-      ? "text-emerald-700 ring-emerald-200/70 dark:text-emerald-300 dark:ring-emerald-500/20"
-      : item.status === "fail"
-        ? "text-amber-700 ring-amber-200/70 dark:text-amber-300 dark:ring-amber-500/20"
-        : "text-stone-500 ring-stone-200/70 dark:text-stone-400 dark:ring-white/10";
-  return (
-    <div className="flex justify-start">
-      <div className={"max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " + tone}>
-        <div className="flex items-center gap-1.5 font-medium">
-          <span>{item.status === "pass" ? "✓" : item.status === "fail" ? "⚠" : "○"}</span>
-          <span>{label}</span>
-        </div>
-        {item.summary && <p className="mt-1 text-stone-600 dark:text-stone-300">{item.summary}</p>}
-        {item.issues.length > 0 && (
-          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-stone-600 dark:text-stone-300">
-            {item.issues.map((iss, i) => (
-              <li key={i}>{iss}</li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Sprint Contract 确认卡:待确认时可编辑交付物/验收标准,确认后只读留痕。 */
-function ContractCard({
+/** 开工对齐卡:只展示 AI 提案 + 三按钮;调整走自然语言(关卡片、focus 输入框,让用户输入反馈,模型自己再起草新版本)。 */
+function PlanCard({
   item,
   onConfirm,
+  onAdjust,
   onCancel
 }: {
-  item: ContractItem;
+  item: PlanItem;
   onConfirm: (requestId: string, deliverables: string[], criteria: string[]) => void;
+  onAdjust: (requestId: string) => void;
   onCancel: (requestId: string) => void;
 }): JSX.Element {
-  const [deliverables, setDeliverables] = useState(item.deliverables.join("\n"));
-  const [criteria, setCriteria] = useState(item.criteria.join("\n"));
-  const toLines = (s: string): string[] =>
-    s
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-
-  if (item.status !== "awaiting") {
-    const confirmed = item.status === "confirmed";
+  // 终态:留痕显示
+  if (item.status === "confirmed" || item.status === "cancelled" || item.status === "revised") {
+    const tone =
+      item.status === "confirmed"
+        ? "text-stone-600 ring-stone-200/70 dark:text-stone-300 dark:ring-white/10"
+        : "text-stone-400 ring-stone-200/70 dark:text-stone-500 dark:ring-white/10";
+    const label =
+      item.status === "confirmed"
+        ? "📋 已对齐,按此交付"
+        : item.status === "revised"
+          ? "✏️ 已示意调整,看下方新版本"
+          : "已取消";
     return (
-      <div className="flex justify-start">
-        <div
-          className={
-            "max-w-[88%] rounded-xl bg-white px-3 py-2 text-[12.5px] ring-1 dark:bg-ink-900 " +
-            (confirmed
-              ? "text-stone-600 ring-stone-200/70 dark:text-stone-300 dark:ring-white/10"
-              : "text-stone-400 ring-stone-200/70 dark:text-stone-500 dark:ring-white/10")
-          }
-        >
-          <div className="font-medium">{confirmed ? "📋 已签约,按此交付" : "已取消契约"}</div>
-          {confirmed && (
-            <>
-              <ContractList title="交付物" items={item.deliverables} />
-              <ContractList title="验收标准" items={item.criteria} />
-            </>
-          )}
-        </div>
+      <div className={"w-full rounded-xl bg-white px-3.5 py-2.5 text-[12.5px] ring-1 dark:bg-ink-900 " + tone}>
+        <div className="font-medium">{label}</div>
+        {item.status === "confirmed" && (
+          <>
+            <PlanList title="交付物" items={item.deliverables} />
+            <PlanList title="验收标准" items={item.criteria} />
+          </>
+        )}
       </div>
     );
   }
 
+  // awaiting / awaiting-feedback:展示 plan + 按钮(awaiting-feedback 时禁用主操作 + 提示在下方输入反馈)
+  const isAwaitingFeedback = item.status === "awaiting-feedback";
   return (
-    <div className="flex justify-start">
-      <div className="max-w-[88%] rounded-xl bg-white px-3 py-2.5 text-[12.5px] text-stone-700 ring-1 ring-ember-200/70 dark:bg-ink-900 dark:text-stone-200 dark:ring-ember-500/25">
-        <div className="mb-1.5 font-medium">📋 动手前先确认这一程的交付契约</div>
-        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">交付物(每行一条)</label>
-        <textarea
-          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
-          rows={Math.max(2, item.deliverables.length)}
-          value={deliverables}
-          onChange={(e) => setDeliverables(e.target.value)}
-        />
-        <label className="mb-0.5 block text-stone-500 dark:text-stone-400">验收标准(每行一条)</label>
-        <textarea
-          className="mb-2 w-full resize-y rounded-md border border-stone-200 bg-transparent px-2 py-1 text-[12.5px] outline-none focus:border-ember-400 dark:border-white/10"
-          rows={Math.max(2, item.criteria.length)}
-          value={criteria}
-          onChange={(e) => setCriteria(e.target.value)}
-        />
-        <div className="flex gap-2">
-          <button
-            className="rounded-md bg-ember-500 px-3 py-1 font-medium text-ink-900 transition hover:bg-ember-400 disabled:opacity-30"
-            disabled={toLines(deliverables).length === 0}
-            onClick={() => onConfirm(item.id, toLines(deliverables), toLines(criteria))}
-          >
-            确认,开干
-          </button>
-          <button
-            className="rounded-md px-3 py-1 text-stone-500 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-400 dark:ring-white/10 dark:hover:bg-ink-800"
-            onClick={() => onCancel(item.id)}
-          >
-            取消
-          </button>
+    <div className="w-full rounded-xl bg-white px-3.5 py-3 text-[12.5px] text-stone-700 ring-1 ring-ember-200/70 dark:bg-ink-900 dark:text-stone-200 dark:ring-ember-500/25">
+      <div className="mb-2 font-medium">📋 动手前先对齐一下这次要交付什么</div>
+      <PlanList title="交付物" items={item.deliverables} />
+      <PlanList title="验收标准" items={item.criteria} />
+      {isAwaitingFeedback && (
+        <div className="mt-2.5 rounded-md bg-ember-50/60 px-2.5 py-1.5 text-[12px] text-stone-600 dark:bg-ember-500/10 dark:text-stone-300">
+          💬 在下方输入你的反馈(例如:加一条 X / 把交付物 2 改成…),发送后让它重新起草
         </div>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          className="rounded-md bg-ember-500 px-3 py-1 font-medium text-ink-900 transition hover:bg-ember-400"
+          onClick={() => onConfirm(item.id, item.deliverables, item.criteria)}
+        >
+          {isAwaitingFeedback ? "改主意了,就这么干" : "就这么干"}
+        </button>
+        {!isAwaitingFeedback && (
+          <button
+            className="rounded-md px-3 py-1 text-stone-600 ring-1 ring-stone-200 transition hover:bg-stone-50 dark:text-stone-300 dark:ring-white/10 dark:hover:bg-ink-800"
+            onClick={() => onAdjust(item.id)}
+          >
+            不对,调一下
+          </button>
+        )}
+        <button
+          className="ml-auto rounded-md px-3 py-1 text-stone-400 transition hover:text-stone-600 dark:text-stone-500 dark:hover:text-stone-300"
+          onClick={() => onCancel(item.id)}
+        >
+          取消
+        </button>
       </div>
     </div>
   );
 }
 
-function ContractList({ title, items }: { title: string; items: string[] }): JSX.Element {
+function PlanList({ title, items }: { title: string; items: string[] }): JSX.Element {
   return (
     <div className="mt-1">
       <span className="text-stone-500 dark:text-stone-400">{title}:</span>
@@ -581,13 +567,13 @@ function AskCard({
   );
 }
 
-function patchContract(
+function patchPlan(
   items: TimelineItem[],
   requestId: string,
-  patch: Partial<Omit<ContractItem, "kind" | "id">>
+  patch: Partial<Omit<PlanItem, "kind" | "id">>
 ): TimelineItem[] {
   return items.map((it) =>
-    it.kind === "contract" && it.id === requestId ? { ...it, ...patch } : it
+    it.kind === "plan" && it.id === requestId ? { ...it, ...patch } : it
   );
 }
 
@@ -597,16 +583,6 @@ function patchAsk(
   patch: Partial<Omit<AskItem, "kind" | "id">>
 ): TimelineItem[] {
   return items.map((it) => (it.kind === "ask" && it.id === requestId ? { ...it, ...patch } : it));
-}
-
-function upsertVerdict(items: TimelineItem[], v: Omit<VerdictItem, "kind">): TimelineItem[] {
-  const idx = items.findIndex((it) => it.kind === "verdict" && it.id === v.id);
-  if (idx >= 0) {
-    const next = items.slice();
-    next[idx] = { kind: "verdict", ...v };
-    return next;
-  }
-  return [...items, { kind: "verdict", ...v }];
 }
 
 function Dots(): JSX.Element {
@@ -621,7 +597,7 @@ function Dots(): JSX.Element {
 
 /** 渲染单元:把连续的 step 块合并成「一轮」,交给 TurnTrace 收成 live 行 / 折叠 chip */
 type TurnUnit = { kind: "turn"; key: string; groups: StepGroup[] };
-type RenderUnit = MsgItem | VerdictItem | ContractItem | AskItem | TurnUnit;
+type RenderUnit = MsgItem | PlanItem | AskItem | TurnUnit;
 
 function groupTimeline(items: TimelineItem[]): RenderUnit[] {
   const out: RenderUnit[] = [];

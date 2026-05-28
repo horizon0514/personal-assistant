@@ -67,8 +67,8 @@ export function transcriptToTimeline(
 
       const calls = Array.isArray(raw.content)
         ? (raw.content as { type?: string; id?: string; name?: string }[]).filter(
-            // propose_contract / ask_user 在 live 有专门交互卡,轨迹里不重复呈现(与实时一致)
-            (b) => b.type === "toolCall" && b.name !== "propose_contract" && b.name !== "ask_user"
+            // propose_plan / ask_user 在 live 有专门交互卡,轨迹里不重复呈现(与实时一致)
+            (b) => b.type === "toolCall" && b.name !== "propose_plan" && b.name !== "ask_user"
           )
         : [];
       if (calls.length) {

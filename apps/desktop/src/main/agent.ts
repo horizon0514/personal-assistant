@@ -13,9 +13,10 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   PiAgentAdapter,
   createPiEvaluator,
-  createContractTool,
+  createPlanTool,
   createAskUserTool,
-  type AgentMessage
+  type AgentMessage,
+  type PlanConfirmation
 } from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
@@ -46,7 +47,7 @@ import {
   type Capability,
   type DomainEvent,
   type RiskLevel,
-  type SprintContract
+  type WorkPlan
 } from "@pa/domain-core";
 import { buildSystemPrompt, buildSessionContext, buildEvaluatorPrompt } from "./system-prompt";
 import { transcriptToTimeline, VIEWABLE_TOOLS } from "./transcript-to-timeline";
@@ -130,7 +131,7 @@ const CAPABILITY_DESCRIPTIONS = [
   { name: "memory", summary: "用户偏好/事实的长期记忆:记下、更新、遗忘、查来龙去脉。详见下方「记忆」指南。" },
   {
     name: "task",
-    summary: "(永远可用)重要的开放任务动手前用 propose_contract 确认交付物与验收标准(见「交付契约」)。"
+    summary: "(永远可用)重要的开放任务动手前用 propose_plan 对齐交付物与验收标准(见「开工对齐」)。"
   }
 ];
 
@@ -192,9 +193,9 @@ const browserTools = createBrowserTools(browser);
 let activeSender: WebContents | undefined;
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
 const pendingBatches = new Map<string, (approved: boolean) => void>();
-// Sprint Contract:待确认的契约请求 + 每会话已确认的契约(供评估器取用)。
-const pendingContracts = new Map<string, (contract: SprintContract | null) => void>();
-const contractsBySession = new Map<string, SprintContract>();
+// Work Plan:待确认的计划请求 + 每会话已确认的计划(供评估器取用)。
+const pendingPlans = new Map<string, (result: PlanConfirmation) => void>();
+const plansBySession = new Map<string, WorkPlan>();
 // ask_user:待用户回答的提问请求(requestId → resolve)。
 const pendingAsks = new Map<string, (answer: string) => void>();
 
@@ -231,12 +232,12 @@ function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[
     sendTo("batch:request", req);
   });
 }
-/** 弹出契约确认卡,等用户确认(可改)/取消。返回确认后的契约或 null。 */
-function requestContractConfirmation(proposed: SprintContract): Promise<SprintContract | null> {
+/** 弹出开工对齐卡,等用户决定(就这么干 / 不对调一下 / 取消)。 */
+function requestPlanConfirmation(proposed: WorkPlan): Promise<PlanConfirmation> {
   return new Promise((resolve) => {
     const requestId = crypto.randomUUID();
-    pendingContracts.set(requestId, resolve);
-    sendTo("contract:request", {
+    pendingPlans.set(requestId, resolve);
+    sendTo("plan:request", {
       requestId,
       deliverables: [...proposed.deliverables],
       criteria: [...proposed.criteria]
@@ -284,12 +285,13 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
       tools: activeBrowserTools
     }
   ];
-  // 不属于具体 capability、但总是要暴露的工具(propose_contract 是任务编排级,跟具体能力域无关)。
+  // 不属于具体 capability、但总是要暴露的工具(propose_plan 是任务编排级,跟具体能力域无关)。
   const alwaysOnExtras: AgentTool[] = [
-    createContractTool({
-      confirm: requestContractConfirmation,
-      onConfirmed: (contract) => contractsBySession.set(sessionId, contract)
+    createPlanTool({
+      confirm: requestPlanConfirmation,
+      onConfirmed: (plan) => plansBySession.set(sessionId, plan)
     }),
+
     // 执行中遇到需用户拍板的岔路:提问并暂停等回答(避免擅自决定 / 误判任务已完成)
     createAskUserTool({ ask: requestUserAnswer })
   ];
@@ -324,7 +326,7 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     model,
     apiKeyResolver: resolveApiKey,
     evaluator,
-    contractProvider: () => contractsBySession.get(sessionId),
+    planProvider: () => plansBySession.get(sessionId),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
       guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]
@@ -343,9 +345,9 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
         .join("\n\n"),
     gatekeeper: createGatekeeper({
       riskOf: (call): RiskLevel =>
-        // plan_file_changes 内部自做批量审批;propose_contract/ask_user 自带交互卡;记忆工具自动执行+可见+可逆(均不走审批)
+        // plan_file_changes 内部自做批量审批;propose_plan/ask_user 自带交互卡;记忆工具自动执行+可见+可逆(均不走审批)
         call.tool === "plan_file_changes" ||
-        call.tool === "propose_contract" ||
+        call.tool === "propose_plan" ||
         call.tool === "ask_user" ||
         memoryToolNames.has(call.tool)
           ? "ReadOnly"
@@ -473,7 +475,7 @@ export const agent = {
   async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
-    contractsBySession.delete(sessionId); // 新任务从无契约开始;本轮若签约由 propose_contract 重新写入
+    plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
     const sessions = getSessions(activeWorkspaceId);
 
     let instance: PiAgentAdapter;
@@ -534,12 +536,12 @@ export const agent = {
       resolve(approved);
     }
   },
-  /** 用户对契约确认卡的回应:确认(可能改过)→ 传契约;取消 → 传 null。 */
-  resolveContract(requestId: string, contract: SprintContract | null): void {
-    const resolve = pendingContracts.get(requestId);
+  /** 用户对开工对齐卡的回应:就这么干 / 调一下(带反馈)/ 取消。 */
+  resolvePlan(requestId: string, result: PlanConfirmation): void {
+    const resolve = pendingPlans.get(requestId);
     if (resolve) {
-      pendingContracts.delete(requestId);
-      resolve(contract);
+      pendingPlans.delete(requestId);
+      resolve(result);
     }
   },
   /** 用户对提问卡的回答 → 喂回执行器,继续本轮。 */

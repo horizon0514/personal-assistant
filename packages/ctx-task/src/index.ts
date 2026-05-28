@@ -34,9 +34,9 @@ import {
 } from "@pa/domain-core";
 
 export { createPiEvaluator, type PiEvaluatorDeps } from "./evaluator";
-export { createContractTool, type ContractToolDeps } from "./contract";
+export { createPlanTool, type PlanToolDeps, type PlanConfirmation } from "./plan";
 export { createAskUserTool, type AskUserToolDeps } from "./ask-user";
-export type { Evaluator, EvaluationRequest, Verdict, SprintContract } from "@pa/domain-core";
+export type { Evaluator, EvaluationRequest, Verdict, WorkPlan } from "@pa/domain-core";
 
 // Trust 端口已下沉到 domain-core;此处仅提供一个全放行的占位实现。
 export type { Gatekeeper, ToolCallIntent, GateDecision } from "@pa/domain-core";
@@ -139,8 +139,8 @@ export interface PiAgentAdapterDeps {
   readonly evaluator?: Evaluator;
   /** 验收不通过时自动返工的最大轮数(evaluator-optimizer 闭环)。默认 1。 */
   readonly maxEvalRetries?: number;
-  /** 取本次任务已确认的交付契约(若执行器签了 propose_contract),作为评估的验收清单。 */
-  readonly contractProvider?: () => import("@pa/domain-core").SprintContract | undefined;
+  /** 取本次任务已确认的开工计划(若执行器跑过 propose_plan),作为评估的验收清单。 */
+  readonly planProvider?: () => import("@pa/domain-core").WorkPlan | undefined;
   /** 领域事件出口(任务/动作生命周期,供工作区面板订阅)*/
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
@@ -225,26 +225,48 @@ export class PiAgentAdapter {
     this.deps.onEvent({ type: "TaskCreated", taskId, intent });
     const translator = new DomainTranslator(taskId, this.deps.capabilityOf);
 
-    // 验收所需的过程信息:是否调过工具、动作日志(累计)、本轮最终汇报文本。
+    // 验收所需的过程信息:是否调过工具、动作日志(累计)。
     let sawTool = false;
     const actionLog: { tool: string; ok: boolean }[] = [];
-    let roundSummary = "";
+
+    // 流式拦截:每个 turn 先累积到 currentTurn,turn 结束按 stopReason 决定立即 flush 还是暂存:
+    // - tool_use 收尾的 turn = 过程 narration → flush 给 UI(用户能看到 AI 在干什么)
+    // - stop 收尾的 turn = final 汇报 → 暂存到 pendingFinal,等 evaluator 验完通过才 flush(不通过则丢弃返工)
+    // 这样用户视角永远只看到通过自查的最终汇报,不会看到"先一份失败汇报、又一段补丁"的拼接感。
+    let currentTurnText = "";
+    let pendingFinalText = "";
+    const flush = (text: string): void => {
+      if (text) this.deps.onAssistantDelta?.(text);
+    };
 
     const unsubscribe = this.agent.subscribe((event) => {
-      // 助理文本增量 → Conversation 通道 + 累计本轮汇报
+      // 助理文本增量 → 先收到 currentTurn,turn 结束再决定 flush 时机
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        roundSummary += event.assistantMessageEvent.delta;
-        this.deps.onAssistantDelta?.(event.assistantMessageEvent.delta);
+        currentTurnText += event.assistantMessageEvent.delta;
       }
       if (event.type === "tool_execution_start") sawTool = true;
       if (event.type === "tool_execution_end") {
         actionLog.push({ tool: event.toolName, ok: !event.isError });
       }
-      // 每个 turn 的 assistant 消息收尾:非正常停因(error/aborted)打日志,便于定位被吞的模型错误
       if (event.type === "message_end") {
         const m = event.message as { role?: string; stopReason?: string; errorMessage?: string };
-        if (m.role === "assistant" && m.stopReason && m.stopReason !== "stop" && m.stopReason !== "tool_use") {
-          console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
+        if (m.role === "assistant") {
+          if (m.stopReason === "tool_use") {
+            // 过程 narration:立即 flush
+            flush(currentTurnText);
+            currentTurnText = "";
+          } else if (m.stopReason === "stop") {
+            // final 汇报:暂存,等 round 末决定
+            pendingFinalText = currentTurnText;
+            currentTurnText = "";
+          } else {
+            // error/aborted:打日志 + 把已累积的文字 flush(别吞掉)
+            if (m.stopReason) {
+              console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
+            }
+            flush(currentTurnText);
+            currentTurnText = "";
+          }
         }
       }
       // 任务/动作生命周期 → 领域事件通道。
@@ -260,19 +282,23 @@ export class PiAgentAdapter {
     try {
       let prompt = intent.text;
       for (let round = 0; ; round++) {
-        roundSummary = "";
+        pendingFinalText = "";
         await this.agent.prompt(prompt);
 
-        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接结束
-        if (!this.deps.evaluator || !sawTool || this.aborted || this.agent.state.errorMessage) break;
+        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接 flush final 退出
+        if (!this.deps.evaluator || !sawTool || this.aborted || this.agent.state.errorMessage) {
+          flush(pendingFinalText);
+          pendingFinalText = "";
+          break;
+        }
 
         this.deps.onEvent({ type: "EvaluationStarted", taskId, round });
         const verdict = await this.deps.evaluator.evaluate({
           taskId,
           intent,
           actionLog: [...actionLog],
-          finalSummary: roundSummary.trim(),
-          contract: this.deps.contractProvider?.()
+          finalSummary: pendingFinalText.trim(),
+          plan: this.deps.planProvider?.()
         });
         const willRetry = !verdict.pass && round < maxRetries && !this.aborted;
         this.deps.onEvent({
@@ -284,10 +310,18 @@ export class PiAgentAdapter {
           summary: verdict.summary,
           retrying: willRetry
         });
-        if (!willRetry) break;
 
-        // 返工:把问题清单回灌给执行器(同一 agent,带上下文)再跑一轮
-        prompt = `「独立验收」未通过,发现以下问题,请逐条核实并修正后继续把任务做完(完成后简洁汇报即可):\n- ${verdict.issues.join("\n- ")}`;
+        if (willRetry) {
+          // 丢弃这一轮的 final(不让用户看到失败版本),把问题清单回灌让执行器返工
+          pendingFinalText = "";
+          prompt = `「独立验收」未通过,发现以下问题,请逐条核实并修正后继续把任务做完(完成后简洁汇报即可):\n- ${verdict.issues.join("\n- ")}`;
+          continue;
+        }
+
+        // 通过 或 已耗尽 retry → 把 final flush 给用户(耗尽 retry 时也给看,避免用户什么都收不到)
+        flush(pendingFinalText);
+        pendingFinalText = "";
+        break;
       }
     } finally {
       unsubscribe();

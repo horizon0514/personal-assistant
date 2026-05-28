@@ -55,11 +55,19 @@ export function registerIpc(): void {
     agent.resolveBatch(p.actionId, p.approved)
   );
 
-  // Sprint Contract:契约确认(可改)/取消
+  // Work Plan:开工对齐回应(就这么干 / 调一下带反馈 / 取消)
   ipcMain.on(
-    "contract:resolve",
-    (_e, p: { requestId: string; contract: { deliverables: string[]; criteria: string[] } | null }) =>
-      agent.resolveContract(p.requestId, p.contract)
+    "plan:resolve",
+    (
+      _e,
+      p: {
+        requestId: string;
+        result:
+          | { kind: "confirm"; plan: { deliverables: string[]; criteria: string[] } }
+          | { kind: "feedback"; text: string }
+          | { kind: "cancel" };
+      }
+    ) => agent.resolvePlan(p.requestId, p.result)
   );
 
   // ask_user:用户对提问卡的回答

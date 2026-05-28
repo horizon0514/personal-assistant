@@ -61,8 +61,8 @@ export interface ApprovalRequest {
   args: Record<string, unknown>;
 }
 
-/** contract:request 负载:执行器起草的待确认契约。 */
-export interface ContractRequest {
+/** plan:request 负载:执行器起草的待确认开工计划。 */
+export interface PlanRequest {
   requestId: string;
   deliverables: string[];
   criteria: string[];
@@ -181,16 +181,21 @@ const api = {
     resolve: (actionId: string, approved: boolean): void =>
       ipcRenderer.send("batch:resolve", { actionId, approved })
   },
-  contract: {
-    /** 订阅契约确认请求(执行器动手前起草) */
-    onRequest: (cb: (req: ContractRequest) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, payload: ContractRequest): void => cb(payload);
-      ipcRenderer.on("contract:request", listener);
-      return () => ipcRenderer.removeListener("contract:request", listener);
+  plan: {
+    /** 订阅开工对齐请求(执行器动手前起草) */
+    onRequest: (cb: (req: PlanRequest) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: PlanRequest): void => cb(payload);
+      ipcRenderer.on("plan:request", listener);
+      return () => ipcRenderer.removeListener("plan:request", listener);
     },
-    /** 回传用户决定:确认(可能改过)→ 传契约;取消 → 传 null */
-    resolve: (requestId: string, contract: { deliverables: string[]; criteria: string[] } | null): void =>
-      ipcRenderer.send("contract:resolve", { requestId, contract })
+    /** 回传用户决定:就这么干 / 调一下(带反馈) / 取消 */
+    resolve: (
+      requestId: string,
+      result:
+        | { kind: "confirm"; plan: { deliverables: string[]; criteria: string[] } }
+        | { kind: "feedback"; text: string }
+        | { kind: "cancel" }
+    ): void => ipcRenderer.send("plan:resolve", { requestId, result })
   },
   ask: {
     /** 订阅执行器的提问请求(执行中需用户拍板) */

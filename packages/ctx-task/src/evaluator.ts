@@ -57,12 +57,12 @@ export function createPiEvaluator(deps: PiEvaluatorDeps): Evaluator {
 
       const log =
         req.actionLog.map((a) => `- ${a.tool}${a.ok ? "" : "(失败)"}`).join("\n") || "(未调用任何工具)";
-      const contractSection = req.contract
-        ? `\n\n## 已确认的交付契约(以此为验收清单,逐条核查)
+      const planSection = req.plan
+        ? `\n\n## 已确认的开工计划(以此为验收清单,逐条核查)
 交付物:
-${req.contract.deliverables.map((d) => `- ${d}`).join("\n") || "- (未列)"}
+${req.plan.deliverables.map((d) => `- ${d}`).join("\n") || "- (未列)"}
 验收标准:
-${req.contract.criteria.map((c) => `- ${c}`).join("\n") || "- (未列)"}`
+${req.plan.criteria.map((c) => `- ${c}`).join("\n") || "- (未列)"}`
         : "";
       const prompt = `# 待验收的任务
 
@@ -73,10 +73,10 @@ ${req.intent.text}
 ${log}
 
 ## 执行器最终汇报
-${req.finalSummary || "(无文字汇报)"}${contractSection}
+${req.finalSummary || "(无文字汇报)"}${planSection}
 
 请用只读工具**独立核查**产出是否真正达成了用户目标(不要轻信上面的汇报,自己去看文件/页面的真实状态)。${
-        req.contract ? "凡契约里的验收标准,逐条核查是否满足。" : ""
+        req.plan ? "凡计划里的验收标准,逐条核查是否满足。" : ""
       }核查完成后调用 submit_verdict 提交判定。`;
 
       await agent.prompt(prompt);
