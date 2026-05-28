@@ -9,6 +9,7 @@
 import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { PiAgentAdapter, createPiEvaluator, createContractTool, type AgentMessage } from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
 import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
@@ -76,6 +77,61 @@ const EVALUATOR_TOOLS = new Set([
   "extract_document",
   "read_current_page"
 ]);
+
+// ── 渐进披露:工具目录(catalog)与按用户轮次的选择 ─────────────
+// 设计:每条用户消息进来前,基于消息内容 + 上一轮真正用过的 capability,
+// 从 catalog 里选出本轮要暴露的工具子集,赋给 agent.state.tools。
+// system prompt 字节冻结(只按能力分区做散文描述,不枚举工具),
+// 实际工具表每轮请求由 API tools 参数承载。catalog 未来加新 capability(如 MCP)只需新加一项。
+
+/**
+ * 一组按能力划分的工具及其披露规则。
+ * - alwaysOn:每轮都暴露(对应"小而高频"的能力,门控收益低)
+ * - matches:基于本轮用户消息文本判断是否启用(对应"大而非每次都用"的能力,如 browser)
+ *
+ * 选择最终结果 = alwaysOn ∪ matches 命中 ∪ 上一轮真正用过 ∪ alwaysOnExtras
+ */
+interface CapabilityGroup {
+  capability: Capability;
+  tools: AgentTool[];
+  /** true 则每轮都暴露;false 时由 matches/recent 决定 */
+  alwaysOn: boolean;
+  /** 用户消息文本里命中即启用本轮(可选,通常给非 alwaysOn 的能力配) */
+  matches?: (userText: string) => boolean;
+}
+
+/**
+ * 启用 browser 工具组的关键词。命中即把整组浏览器工具暴露给本轮。
+ * 宁多勿少:漏一个常见词导致本轮拿不到 browser 比多挂一组更糟。
+ */
+const BROWSER_KEYWORDS =
+  /网页|网址|网站|链接|搜索|搜一下|搜个|查一下|查询|调研|google|baidu|百度|bing|url|https?:\/\/|打开.{0,4}页|浏览器|页面|在线|登录/i;
+
+/**
+ * 注入 system prompt 的能力分区描述。**字节冻结**:同一份描述跨 session/天/adapter 重建必须逐字节相同。
+ * 不逐工具枚举——实际工具集每轮由 API tools 参数承载。
+ */
+const CAPABILITY_DESCRIPTIONS = [
+  {
+    name: "filesystem",
+    summary: "本地文件系统操作:列目录、读文件、按名/内容查找、写入,以及批量移动/删除(带审批与回滚)。"
+  },
+  { name: "document", summary: "本地文档抽取(PDF / 纯文本类)成纯文本以便阅读总结。" },
+  {
+    name: "browser",
+    summary: "内置浏览器调研与操作:搜索、抓正文(可后台并发)、可见面板打开/读当前、点击/输入/截图。详见下方「网页调研」「网页操作」指南。"
+  },
+  { name: "memory", summary: "用户偏好/事实的长期记忆:记下、更新、遗忘、查来龙去脉。详见下方「记忆」指南。" },
+  {
+    name: "task",
+    summary: "(永远可用)重要的开放任务动手前用 propose_contract 确认交付物与验收标准(见「交付契约」)。"
+  }
+];
+
+// 每会话「上一轮真正用过的 capability」累积器(渐进披露的 continuation 兜底,见 send / afterTool)。
+const recentBySession = new Map<string, Set<Capability>>();
+// 每会话工具选择器(buildAdapter 时绑定 sessionId 闭包,send 里读取)。
+const selectorsBySession = new Map<string, (userText: string, recent: Set<Capability>) => AgentTool[]>();
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -191,26 +247,59 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
   const activeBrowserTools = modelHasVision
     ? browserTools
     : browserTools.filter((t) => t.name !== "browser_screenshot");
-  const tools = [
-    ...filesystemTools,
-    ...documentTools,
-    ...activeBrowserTools,
-    createPlanFileChangesTool(requestBatchApproval),
-    // Sprint Contract:动手前与用户确认交付物 + 验收标准;确认后存到本会话供评估器取用
+
+  // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
+  const catalog: CapabilityGroup[] = [
+    {
+      capability: "filesystem",
+      alwaysOn: true,
+      tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
+    },
+    { capability: "document", alwaysOn: true, tools: [...documentTools] },
+    {
+      capability: "memory",
+      alwaysOn: true,
+      tools: createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
+    },
+    {
+      capability: "browser",
+      alwaysOn: false,
+      matches: (text) => BROWSER_KEYWORDS.test(text),
+      tools: activeBrowserTools
+    }
+  ];
+  // 不属于具体 capability、但总是要暴露的工具(propose_contract 是任务编排级,跟具体能力域无关)。
+  const alwaysOnExtras: AgentTool[] = [
     createContractTool({
       confirm: requestContractConfirmation,
       onConfirmed: (contract) => contractsBySession.set(sessionId, contract)
-    }),
-    // 新记忆的情景里记下它从哪个会话学来的
-    ...createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
+    })
   ];
+  /** 全集:评估器筛选只读子集用 + 适配器初始 tools(send 里会被本轮选择结果覆盖)。 */
+  const allTools: AgentTool[] = [...catalog.flatMap((g) => g.tools), ...alwaysOnExtras];
 
-  // 独立验收器:同模型 + 只读工具子集 + 挑剔的评估器提示,与执行器上下文隔离。
+  /**
+   * 本轮工具选择器:alwaysOn ∪ matches 命中 ∪ recent(上一轮真正用过的 capability)∪ alwaysOnExtras。
+   * recent 是 continuation 兜底——比如上一轮用了 browser,本轮用户只回"好了",关键词不会命中,
+   * 但 recent 里还有 browser,这一轮仍把 browser 工具组挂上,模型才能接着干。
+   */
+  const selectTools = (userText: string, recent: Set<Capability>): AgentTool[] => {
+    const out: AgentTool[] = [...alwaysOnExtras];
+    for (const g of catalog) {
+      if (g.alwaysOn || recent.has(g.capability) || (g.matches?.(userText) ?? false)) {
+        out.push(...g.tools);
+      }
+    }
+    return out;
+  };
+  selectorsBySession.set(sessionId, selectTools);
+
+  // 独立验收器:与执行器的"按轮选择"无关——评估器要看得见所有只读工具,从全集筛。
   const evaluator = createPiEvaluator({
     model,
     apiKeyResolver: resolveApiKey,
     systemPrompt: buildEvaluatorPrompt(),
-    readonlyTools: tools.filter((t) => EVALUATOR_TOOLS.has(t.name))
+    readonlyTools: allTools.filter((t) => EVALUATOR_TOOLS.has(t.name))
   });
 
   return new PiAgentAdapter({
@@ -219,11 +308,12 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     evaluator,
     contractProvider: () => contractsBySession.get(sessionId),
     systemPrompt: buildSystemPrompt({
-      tools: tools.map((t) => ({ name: t.name, description: t.description })),
+      capabilities: CAPABILITY_DESCRIPTIONS,
       guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]
     }),
     thinkingLevel: "high",
-    tools,
+    // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
+    tools: allTools,
     initialMessages,
     // 注入 [session context](环境信息,决策 2:不进字节冻结的 system prompt)+ 记忆召回。
     // 经 transformContext 作为前置消息每轮注入,不写入持久 transcript。
@@ -248,6 +338,13 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     onEvent: (event: DomainEvent) => sendTo("domain:event", event),
     afterTool: ({ actionId, capability, tool, details, resultText, isError }) => {
       if (isError) return;
+      // 渐进披露:记下本轮真正用了哪些 capability,下条用户消息进来时把它们继续保留(continuation 兜底)
+      let recent = recentBySession.get(sessionId);
+      if (!recent) {
+        recent = new Set();
+        recentBySession.set(sessionId, recent);
+      }
+      recent.add(capability);
       // 注入检测:web_fetch 抓到疑似注入内容时,报领域事件 + 日志(纵深防御的"提示"层)
       const inj = details as { injectionSuspected?: boolean; injectionReasons?: string[]; url?: string } | undefined;
       if (inj?.injectionSuspected) {
@@ -311,6 +408,8 @@ export const agent = {
     memoryStores.delete(wsId);
     sessionStores.delete(wsId);
     adapters.clear(); // 简单起见全清,下次按需从磁盘 transcript 重建
+    selectorsBySession.clear();
+    recentBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -366,6 +465,16 @@ export const agent = {
       return;
     }
     try {
+      // 渐进披露:从 catalog 选出本轮要暴露的工具子集,赋给 agent.state.tools。
+      // 时序:读取「上一轮真正用过的 capability」用作 continuation 兜底,然后清零本轮的累加器,
+      //      再调 selectTools(基于用户文本 + recent),最后 setTools。
+      // pi 的 createContextSnapshot 在 startTask 触发的 prompt() 开头快照 state.tools,故必须在 startTask 之前调用。
+      const selector = selectorsBySession.get(sessionId);
+      if (selector) {
+        const prevRecent = recentBySession.get(sessionId) ?? new Set<Capability>();
+        recentBySession.set(sessionId, new Set()); // 重置:本轮的累加从空开始
+        instance.setTools(selector(text, prevRecent));
+      }
       await instance.startTask({ text, conversationId: newConversationId() });
       // 落盘:transcript 快照 + 首条用户消息自动命名(先截断占位)
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());

@@ -10,13 +10,17 @@
 import { homedir, platform, tmpdir, type } from "node:os";
 import { TRUST_BOUNDARY_PROMPT } from "@pa/domain-core";
 
-export interface ToolInfo {
+/** 能力分区描述(按能力组介绍,而非逐个工具),供 system prompt 字节冻结的工具区使用。 */
+export interface CapabilityDescription {
+  /** 能力短名,如 filesystem / browser / memory / task */
   name: string;
-  description: string;
+  /** 一句话概述该能力域里"大致有些什么",不逐个枚举具体工具 */
+  summary: string;
 }
 
 export interface BuildSystemPromptOptions {
-  tools: ToolInfo[];
+  /** 按能力分区的描述(非逐工具枚举);用于配合渐进披露——实际工具集每轮注入 */
+  capabilities: CapabilityDescription[];
   /** 各能力自带的使用指南(跨工具编排),由组合根收集后注入 */
   guidelines?: string[];
 }
@@ -31,8 +35,9 @@ const OS_LABEL: Record<string, string> = {
  * 字节冻结的 system prompt:只含「不随时间/环境变化」的行为约定与工具清单。
  * 注意:不接受 `now` / 环境参数 —— 任何动态信息都应走 buildSessionContext()。
  */
-export function buildSystemPrompt({ tools, guidelines = [] }: BuildSystemPromptOptions): string {
-  const toolsList = tools.map((t) => `- ${t.name}:${t.description}`).join("\n");
+export function buildSystemPrompt({ capabilities, guidelines = [] }: BuildSystemPromptOptions): string {
+  // 工具区按能力分区描述(字节冻结),不逐工具枚举——实际可用工具表每轮请求由系统按需注入,以 tools 表为准。
+  const toolsList = capabilities.map((c) => `- **${c.name}**:${c.summary}`).join("\n");
   const guidelinesSection = guidelines.length > 0 ? `\n\n# 能力使用指南\n${guidelines.join("\n\n")}` : "";
 
   return `你是 Akari,一个帮助知识工作者完成任务的个人助理,运行在用户本机,可调用工具操作本地文件系统。
@@ -61,7 +66,8 @@ export function buildSystemPrompt({ tools, guidelines = [] }: BuildSystemPromptO
 
 ${TRUST_BOUNDARY_PROMPT}
 
-# 可用工具
+# 可用工具(按能力分区)
+本助理的工具按能力域组织,**每轮请求实际暴露的工具表会按本轮任务需要变化**——以本轮 tools 表为准,不要假设某个工具一定存在;如果某能力本轮没暴露但你需要用,用文字向用户说明你需要什么再继续。
 ${toolsList}${guidelinesSection}
 
 # 风格
