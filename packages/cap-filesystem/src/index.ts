@@ -25,6 +25,25 @@ function textResult<T>(text: string, details: T): AgentToolResult<T> {
   return { content: [{ type: "text", text }], details };
 }
 
+/**
+ * 路径找不到时的近邻提示:在父目录里按 basename 的字面 token 做大小写不敏感子串匹配,
+ * 列出最多 12 条同名候选,推到模型脸上让它换路而不是凭路径名重试。
+ */
+async function nearbyInParent(path: string, limit = 12): Promise<string[]> {
+  const parent = dirname(path);
+  const target = basename(path).toLowerCase();
+  try {
+    const entries = await readdir(parent, { withFileTypes: true });
+    const tokens = target.split(/[.\-_\s]/).filter((t) => t.length >= 2);
+    return entries
+      .filter((e) => tokens.length === 0 || tokens.some((t) => e.name.toLowerCase().includes(t)))
+      .map((e) => `${e.isDirectory() ? "📁" : "📄"} ${e.name}`)
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 const listDirParams = Type.Object({
   path: Type.String({ description: "目录的绝对路径" })
 });
@@ -35,7 +54,21 @@ const listDirTool: AgentTool<typeof listDirParams> = {
   description: "列出指定目录下的文件与子目录(只读)。",
   parameters: listDirParams,
   execute: async (_id, { path }) => {
-    const entries = await readdir(path, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(path, { withFileTypes: true });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        const siblings = await nearbyInParent(path);
+        const kind = code === "ENOTDIR" ? "不是目录" : "不存在";
+        const hint = siblings.length
+          ? `父目录 \`${dirname(path)}\` 下可能相关:\n${siblings.join("\n")}\n\n是其中之一就用准确名字重试;不是的话,从更上层 list_dir 找,别凭路径名臆测。`
+          : `父目录 \`${dirname(path)}\` 也读不到——确认绝对路径正确,或从用户主目录逐级下行。`;
+        throw new Error(`路径${kind}:${path}\n\n${hint}`);
+      }
+      throw err;
+    }
     const lines = entries.map((e) => `${e.isDirectory() ? "📁" : "📄"} ${e.name}`);
     const text = lines.length ? lines.join("\n") : "(空目录)";
     return textResult(text, { path, count: entries.length });
@@ -52,7 +85,23 @@ const readFileTool: AgentTool<typeof readFileParams> = {
   description: "读取一个文本文件的内容(只读,超长会截断)。",
   parameters: readFileParams,
   execute: async (_id, { path }) => {
-    const buf = await readFile(path);
+    let buf;
+    try {
+      buf = await readFile(path);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        const siblings = await nearbyInParent(path);
+        const hint = siblings.length
+          ? `同目录下可能相关:\n${siblings.join("\n")}\n\n是其中之一就带准确名字重试;不是的话,先 list_dir 看看,别凭路径名臆测。`
+          : `先 list_dir \`${dirname(path)}\` 看实际有什么,或确认上级路径正确。`;
+        throw new Error(`文件不存在:${path}\n\n${hint}`);
+      }
+      if (code === "EISDIR") {
+        throw new Error(`这是目录不是文件:${path}\n\n用 list_dir 看里面有什么,再 read_file 具体文件。`);
+      }
+      throw err;
+    }
     const truncated = buf.byteLength > MAX_READ_BYTES;
     const text = buf.subarray(0, MAX_READ_BYTES).toString("utf8");
     return textResult(truncated ? `${text}\n\n…(已截断,文件共 ${buf.byteLength} 字节)` : text, {
@@ -106,6 +155,41 @@ const findFilesParams = Type.Object({
   namePattern: Type.String({ description: "文件名 glob,如 *.pdf、报销*.xlsx、*。支持 * 和 ?" })
 });
 
+/** 零命中时给模型留一条"换路"指引:有相似名字就推过去,有别的扩展名就提一句,逼它别用同一参数再搜一次。 */
+async function buildFindFilesHint(dir: string, glob: string, all: string[]): Promise<string> {
+  // 先排除"路径根本不对"这种最常见的假设错(walkFiles 内部吞错,无法从 all 长度判断)
+  try {
+    const st = await stat(dir);
+    if (!st.isDirectory()) {
+      return `(未找到匹配文件)路径 \`${dir}\` 不是目录——确认是否打成了文件路径,或换上级目录。`;
+    }
+  } catch {
+    return `(未找到匹配文件)路径 \`${dir}\` 不存在——确认上级路径正确,从已知存在的目录 list_dir 逐级下行。`;
+  }
+  if (all.length === 0) {
+    return `(未找到匹配文件)目录 \`${dir}\` 下未扫描到任何文件——可能整层都是被跳过的目录(node_modules/.git 等),或权限不足。先 list_dir 看结构。`;
+  }
+  // 把 glob 按通配符/标点/分隔符切成"字面 token",≥2 字符的才用来做近邻匹配;太短(如 'a')会乱配
+  const lowerTokens = glob
+    .toLowerCase()
+    .split(/[*?.\-_\s]/)
+    .filter((t) => t.length >= 2);
+  const seen = new Set<string>();
+  const nearby = lowerTokens.length
+    ? all
+        .map((p) => basename(p))
+        .filter((n) => lowerTokens.some((t) => n.toLowerCase().includes(t)))
+        .filter((n) => (seen.has(n) ? false : (seen.add(n), true)))
+        .slice(0, 8)
+    : [];
+  const exts = new Set(all.map((p) => extname(p).toLowerCase()).filter((e) => e));
+  const parts = [`(未找到匹配文件)已扫描 ${all.length} 个文件,无一匹配 \`${glob}\`。`];
+  if (nearby.length) parts.push(`可能相关:\n${nearby.map((n) => `  - ${n}`).join("\n")}`);
+  if (exts.size) parts.push(`目录里实际有的扩展名:${[...exts].slice(0, 10).join(", ")}`);
+  parts.push("下一步:放宽 glob、检查大小写/中英文、换上级目录,或改用 grep_files 搜内容;别用同一参数再搜一次。");
+  return parts.join("\n\n");
+}
+
 const findFilesTool: AgentTool<typeof findFilesParams> = {
   name: "find_files",
   label: "查找文件",
@@ -115,7 +199,7 @@ const findFilesTool: AgentTool<typeof findFilesParams> = {
     const re = globToRegExp(namePattern);
     const all = await walkFiles(dir);
     const matched = all.filter((p) => re.test(basename(p)));
-    const text = matched.length ? matched.join("\n") : "(未找到匹配文件)";
+    const text = matched.length ? matched.join("\n") : await buildFindFilesHint(dir, namePattern, all);
     return textResult(text, { dir, namePattern, count: matched.length, scanned: all.length });
   }
 };
@@ -125,6 +209,29 @@ const grepFilesParams = Type.Object({
   query: Type.String({ description: "要在文件内容中查找的文本(大小写不敏感子串)" }),
   namePattern: Type.Optional(Type.String({ description: "可选:仅在匹配此文件名 glob 的文件中搜索,如 *.txt" }))
 });
+
+/** 零命中时的提示:区分"根本没扫到文件"vs"扫了但没命中",分别给不同换路建议。 */
+async function buildGrepFilesHint(
+  dir: string,
+  query: string,
+  scannedFiles: number,
+  namePattern?: string
+): Promise<string> {
+  if (scannedFiles === 0) {
+    try {
+      const st = await stat(dir);
+      if (!st.isDirectory()) {
+        return `(未找到匹配内容)路径 \`${dir}\` 不是目录——确认是否打错了路径。`;
+      }
+    } catch {
+      return `(未找到匹配内容)路径 \`${dir}\` 不存在——确认上级路径正确,从已知存在的目录开始。`;
+    }
+    return namePattern
+      ? `(未找到匹配内容)\`namePattern: ${namePattern}\` 未命中任何文件——先用 find_files 确认符合该模式的文件是否存在,或去掉 namePattern 再搜。`
+      : `(未找到匹配内容)目录 \`${dir}\` 下未扫描到可读文件——可能整层都是被跳过的目录或二进制。先 list_dir 看结构。`;
+  }
+  return `(未找到匹配内容)已扫描 ${scannedFiles} 个文件,均不含 "${query}"。\n\n下一步:检查大小写/拼写、换近义词或中英文、放宽到更短子串,或换上级目录;别用同一参数再搜一次。`;
+}
 
 const grepFilesTool: AgentTool<typeof grepFilesParams> = {
   name: "grep_files",
@@ -154,8 +261,8 @@ const grepFilesTool: AgentTool<typeof grepFilesParams> = {
         /* 跳过读不了的文件 */
       }
     }
-    const text = hits.length ? hits.join("\n") : "(未找到匹配内容)";
-    return textResult(text, { dir, query, count: hits.length });
+    const text = hits.length ? hits.join("\n") : await buildGrepFilesHint(dir, query, files.length, namePattern);
+    return textResult(text, { dir, query, count: hits.length, scannedFiles: files.length });
   }
 };
 
