@@ -319,7 +319,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     {
       capability: "shell",
       alwaysOn: false,
-      matches: (text) => SHELL_KEYWORDS.test(text),
+      // shell 关键词命中,**或**已装任何 Skill 时暴露 exec_shell:
+      // Skill 跑在 exec_shell 上,装了 Skill 的任务(如「发飞书消息」)多半不含 shell 关键词,
+      // 不一并暴露会让模型读了手册却发现无工具可执行。每次重扫=随 Skill 热加载。
+      matches: (text) => SHELL_KEYWORDS.test(text) || scanSkills(SKILLS_DIR).length > 0,
       tools: [...shellTools]
     }
   ];
