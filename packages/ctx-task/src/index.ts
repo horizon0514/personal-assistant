@@ -145,6 +145,11 @@ export interface PiAgentAdapterDeps {
   readonly onEvent: (event: DomainEvent) => void;
   /** 助理文本增量出口(Conversation 关注点,不进领域事件)*/
   readonly onAssistantDelta?: (text: string) => void;
+  /**
+   * 每个 assistant turn 收尾时出口,参数为当前 transcript 快照(供增量落盘)。
+   * 让运行中的会话边跑边持久化,而非等整轮结束——卡住/崩溃/关窗也不丢已发生的对话。
+   */
+  readonly onTurnEnd?: (transcript: AgentMessage[]) => void;
   /** 工具执行完成出口(供 Reversibility 记账等)*/
   readonly afterTool?: (info: {
     actionId: ActionId;
@@ -229,20 +234,19 @@ export class PiAgentAdapter {
     let sawTool = false;
     const actionLog: { tool: string; ok: boolean }[] = [];
 
-    // 流式拦截:每个 turn 先累积到 currentTurn,turn 结束按 stopReason 决定立即 flush 还是暂存:
-    // - tool_use 收尾的 turn = 过程 narration → flush 给 UI(用户能看到 AI 在干什么)
-    // - stop 收尾的 turn = final 汇报 → 暂存到 pendingFinal,等 evaluator 验完通过才 flush(不通过则丢弃返工)
-    // 这样用户视角永远只看到通过自查的最终汇报,不会看到"先一份失败汇报、又一段补丁"的拼接感。
+    // 验收策略:乐观流式 + 失败回滚。final 汇报照常实时流式呈现(流式优先),
+    // evaluator 仅在不通过时,经 EvaluationCompleted{retrying} 通知 UI 撤回这段待核验汇报、
+    // 再流式补上修正版本。currentTurnText 仍累积,但只用于把 final 汇报文本喂给 evaluator(判定输入),
+    // 不再用于"延迟/扣留 flush"——任何文本都边到边发,不再按 turn 缓冲。
     let currentTurnText = "";
     let pendingFinalText = "";
-    const flush = (text: string): void => {
-      if (text) this.deps.onAssistantDelta?.(text);
-    };
 
     const unsubscribe = this.agent.subscribe((event) => {
-      // 助理文本增量 → 先收到 currentTurn,turn 结束再决定 flush 时机
+      // 助理文本增量 → 实时流式给 UI;同时累积本 turn 文本(供 evaluator 判定 final 汇报)
       if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-        currentTurnText += event.assistantMessageEvent.delta;
+        const delta = event.assistantMessageEvent.delta;
+        currentTurnText += delta;
+        this.deps.onAssistantDelta?.(delta);
       }
       if (event.type === "tool_execution_start") sawTool = true;
       if (event.type === "tool_execution_end") {
@@ -251,22 +255,15 @@ export class PiAgentAdapter {
       if (event.type === "message_end") {
         const m = event.message as { role?: string; stopReason?: string; errorMessage?: string };
         if (m.role === "assistant") {
-          if (m.stopReason === "tool_use") {
-            // 过程 narration:立即 flush
-            flush(currentTurnText);
-            currentTurnText = "";
-          } else if (m.stopReason === "stop") {
-            // final 汇报:暂存,等 round 末决定
+          // stop 收尾的 turn = final 汇报:留存文本供 evaluator 判定(内容已实时流式给用户)
+          if (m.stopReason === "stop") {
             pendingFinalText = currentTurnText;
-            currentTurnText = "";
-          } else {
-            // error/aborted:打日志 + 把已累积的文字 flush(别吞掉)
-            if (m.stopReason) {
-              console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
-            }
-            flush(currentTurnText);
-            currentTurnText = "";
+          } else if (m.stopReason && m.stopReason !== "tool_use") {
+            console.error(`[agent] assistant turn 结束于 stopReason=${m.stopReason}`, m.errorMessage ?? "");
           }
+          currentTurnText = "";
+          // 增量落盘:这一 turn(及其之前的工具结果)已进 state.messages,持久化一份快照
+          this.deps.onTurnEnd?.(this.snapshotTranscript());
         }
       }
       // 任务/动作生命周期 → 领域事件通道。
@@ -285,10 +282,8 @@ export class PiAgentAdapter {
         pendingFinalText = "";
         await this.agent.prompt(prompt);
 
-        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接 flush final 退出
+        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接结束(final 已流式呈现)
         if (!this.deps.evaluator || !sawTool || this.aborted || this.agent.state.errorMessage) {
-          flush(pendingFinalText);
-          pendingFinalText = "";
           break;
         }
 
@@ -312,14 +307,14 @@ export class PiAgentAdapter {
         });
 
         if (willRetry) {
-          // 丢弃这一轮的 final(不让用户看到失败版本),把问题清单回灌让执行器返工
+          // 这一轮的 final 已流式呈现但未通过自查:UI 收到 retrying 会撤回它,
+          // 此处把问题清单回灌让执行器返工,修正版本随后流式补入。
           pendingFinalText = "";
           prompt = `「独立验收」未通过,发现以下问题,请逐条核实并修正后继续把任务做完(完成后简洁汇报即可):\n- ${verdict.issues.join("\n- ")}`;
           continue;
         }
 
-        // 通过 或 已耗尽 retry → 把 final flush 给用户(耗尽 retry 时也给看,避免用户什么都收不到)
-        flush(pendingFinalText);
+        // 通过 或 已耗尽 retry → final 已流式呈现,直接结束(耗尽 retry 时也保留已给用户看到的版本)
         pendingFinalText = "";
         break;
       }
