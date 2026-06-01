@@ -7,7 +7,7 @@
  * - 每 session 一个 PiAgentAdapter(用持久化 transcript 播种,带记忆接着聊)。
  */
 import { app, BrowserWindow, type WebContents } from "electron";
-import { copyFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
@@ -41,6 +41,8 @@ import {
 } from "@pa/cap-filesystem";
 import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
+import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
+import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
 import { BrowserManager } from "./browser-manager";
 import {
   newConversationId,
@@ -60,6 +62,20 @@ const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
 // 拒收 image_url(只认 text)。将来换到支持图片的模型时设 MAIN_VITE_VISION=1 开启。
 const FORCE_VISION = import.meta.env.MAIN_VITE_VISION === "1";
 
+/**
+ * 跨平台 shell 底座解析(见 akari-goal:exec_shell 跨平台底座)。
+ * 指定随包 shell(如 busybox)→ 三平台命令一致;未指定 → 回落系统默认 shell(当前行为,零回归)。
+ * 打包 busybox 后,这里改为 app.isPackaged 时指向 resources 里的二进制 + args ["sh","-c"]。
+ * 现阶段经 env 注入便于先行验证:MAIN_VITE_SHELL_BIN=可执行路径;MAIN_VITE_SHELL_ARGS=逗号分隔前置参数(busybox 用 "sh,-c",默认 "-c")。
+ */
+function resolveShellSpec(): ShellSpec | undefined {
+  const bin = import.meta.env.MAIN_VITE_SHELL_BIN as string | undefined;
+  if (!bin) return undefined;
+  const argsRaw = (import.meta.env.MAIN_VITE_SHELL_ARGS as string | undefined) ?? "-c";
+  return { bin, args: argsRaw.split(",").map((s) => s.trim()).filter(Boolean) };
+}
+const shellTools = createShellTools({ shell: resolveShellSpec() });
+
 /** API key 解析:用户设置里存的(safeStorage)优先 → 构建期 .env(dev 兜底)→ 环境变量。 */
 async function resolveApiKey(provider: string): Promise<string | undefined> {
   return keyStore.get(provider) ?? API_KEY ?? (await envApiKeyResolver(provider));
@@ -73,6 +89,7 @@ for (const t of memoryToolNames) capabilityByTool.set(t, "memory");
 for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
+for (const t of shellToolNames) capabilityByTool.set(t, "shell");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
 
 // 评估器可用的只读工具(独立核查产出用;不含记忆写入/破坏性工具)。
@@ -115,6 +132,13 @@ const BROWSER_KEYWORDS =
   /网页|网址|网站|链接|搜索|搜一下|搜个|查一下|查询|调研|google|baidu|百度|bing|url|https?:\/\/|打开.{0,4}页|浏览器|页面|在线|登录/i;
 
 /**
+ * 启用 shell 工具组的关键词。命中即把 exec_shell 暴露给本轮。
+ * 只在该用户明确要执行命令时才暴露,避免模型随意调起 shell。
+ */
+const SHELL_KEYWORDS =
+  /shell|终端|命令行|命令|执行|运行|跑一下|git |npm |pnpm |yarn |node |python |bash |zsh |chmod|chown|mkdir|rm |cp |mv |ls |cat |grep |find |du |df |ps |kill|brew |curl |wget |tar |zip |unzip|docker |kubectl|ssh |scp/i;
+
+/**
  * 注入 system prompt 的能力分区描述。**字节冻结**:同一份描述跨 session/天/adapter 重建必须逐字节相同。
  * 不逐工具枚举——实际工具集每轮由 API tools 参数承载。
  */
@@ -132,6 +156,10 @@ const CAPABILITY_DESCRIPTIONS = [
   {
     name: "task",
     summary: "(永远可用)重要的开放任务动手前用 propose_plan 对齐交付物与验收标准(见「开工对齐」)。"
+  },
+  {
+    name: "shell",
+    summary: "在用户本机执行 shell 命令并返回输出。纯只读命令自动跑,写/改状态的命令需审批。详见下方「Shell 执行」指南。"
   }
 ];
 
@@ -144,6 +172,10 @@ const selectorsBySession = new Map<string, (userText: string, recent: Set<Capabi
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
 let activeWorkspaceId = workspaces.ensureDefault();
 let activeSessionId = "";
+
+// Skill 热插拔根目录(用户可往里丢文件夹,无需重启即生效)。每轮 send 经 contextProvider 重扫。
+const SKILLS_DIR = join(app.getPath("userData"), "skills");
+mkdirSync(SKILLS_DIR, { recursive: true });
 
 migrateLegacyMemory();
 
@@ -283,6 +315,12 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
       alwaysOn: false,
       matches: (text) => BROWSER_KEYWORDS.test(text),
       tools: activeBrowserTools
+    },
+    {
+      capability: "shell",
+      alwaysOn: false,
+      matches: (text) => SHELL_KEYWORDS.test(text),
+      tools: [...shellTools]
     }
   ];
   // 不属于具体 capability、但总是要暴露的工具(propose_plan 是任务编排级,跟具体能力域无关)。
@@ -293,7 +331,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     }),
 
     // 执行中遇到需用户拍板的岔路:提问并暂停等回答(避免擅自决定 / 误判任务已完成)
-    createAskUserTool({ ask: requestUserAnswer })
+    createAskUserTool({ ask: requestUserAnswer }),
+
+    // Skill 原语:按名加载热插拔能力的操作手册(列表每次热读盘)。唯一的 skill 工具,新增 skill 不加任何工具。
+    createUseSkillTool({ list: () => scanSkills(SKILLS_DIR) })
   ];
   /** 全集:评估器筛选只读子集用 + 适配器初始 tools(send 里会被本轮选择结果覆盖)。 */
   const allTools: AgentTool[] = [...catalog.flatMap((g) => g.tools), ...alwaysOnExtras];
@@ -329,7 +370,7 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     planProvider: () => plansBySession.get(sessionId),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
-      guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines]
+      guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines, shellGuidelines]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
@@ -340,22 +381,31 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     // 注意:不再注入 modelLabel —— 它把"当前模型:deepseek"喂进上下文,会诱导模型把自己
     // 当成底层 LLM 报家门,与 Akari 的助理身份冲突;且无任何代码依赖模型自知模型名。
     contextProvider: () =>
-      [buildSessionContext(), memory.render()]
+      // 注:Skill 清单走这里(每轮重扫=热加载),不进冻结的 system prompt——既保持缓存纪律,又让新装的 skill 下条消息即生效。
+      [buildSessionContext(), memory.render(), renderSkillsForContext(scanSkills(SKILLS_DIR))]
         .filter((s): s is string => Boolean(s && s.trim()))
         .join("\n\n"),
     gatekeeper: createGatekeeper({
-      riskOf: (call): RiskLevel =>
+      riskOf: (call): RiskLevel => {
         // plan_file_changes 内部自做批量审批;propose_plan/ask_user 自带交互卡;记忆工具自动执行+可见+可逆(均不走审批)
-        call.tool === "plan_file_changes" ||
-        call.tool === "propose_plan" ||
-        call.tool === "ask_user" ||
-        memoryToolNames.has(call.tool)
-          ? "ReadOnly"
-          : riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call),
+        if (
+          call.tool === "plan_file_changes" ||
+          call.tool === "propose_plan" ||
+          call.tool === "ask_user" ||
+          call.tool === "use_skill" ||
+          memoryToolNames.has(call.tool)
+        )
+          return "ReadOnly";
+        // exec_shell 风险取决于命令内容:纯只读自动跑,写/改/拿不准的走审批
+        if (call.tool === "exec_shell") return classifyShellRisk(String(call.args.command ?? ""));
+        return riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call);
+      },
       requestApproval
     }),
     capabilityOf,
     onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
+    // 增量落盘:每个 assistant turn 收尾即持久化快照,运行中(含卡在审批/规划)也不丢对话。
+    onTurnEnd: (transcript) => getSessions(wsId).saveTranscript(sessionId, transcript),
     onEvent: (event: DomainEvent) => sendTo("domain:event", event),
     afterTool: ({ actionId, capability, tool, details, resultText, isError }) => {
       if (isError) return;
@@ -536,7 +586,7 @@ export const agent = {
       resolve(approved);
     }
   },
-  /** 用户对开工对齐卡的回应:就这么干 / 调一下(带反馈)/ 取消。 */
+  /** 用户对开工对齐卡的回应:就这么干 / 不对调一下 / 取消。 */
   resolvePlan(requestId: string, result: PlanConfirmation): void {
     const resolve = pendingPlans.get(requestId);
     if (resolve) {
