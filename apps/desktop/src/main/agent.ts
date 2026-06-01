@@ -44,6 +44,7 @@ import { createBrowserTools, browserToolNames, browserToolRisk, browserGuideline
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
 import { BrowserManager } from "./browser-manager";
+import { createSearchHistoryTool, searchHistoryToolName } from "./history-search";
 import {
   newConversationId,
   type Capability,
@@ -90,9 +91,12 @@ for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 for (const t of shellToolNames) capabilityByTool.set(t, "shell");
+capabilityByTool.set(searchHistoryToolName, "memory"); // 跨对话回忆,归入记忆能力
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
 
 // 评估器可用的只读工具(独立核查产出用;不含记忆写入/破坏性工具)。
+// 验收器的只读核查工具子集。含 read_current_page:网页类任务里验收器要靠它核查页面真实状态。
+// (它现在是安全的——current() 没有已打开页面时只如实回报、绝不拉起空浏览器面板,见 browser-manager。)
 const EVALUATOR_TOOLS = new Set([
   "list_dir",
   "read_file",
@@ -230,6 +234,9 @@ const pendingPlans = new Map<string, (result: PlanConfirmation) => void>();
 const plansBySession = new Map<string, WorkPlan>();
 // ask_user:待用户回答的提问请求(requestId → resolve)。
 const pendingAsks = new Map<string, (answer: string) => void>();
+// 运行代际:每条 send 自增一次;用户在验收期发来新消息会打断旧 run——旧 run 收尾时
+// 若代际已被新 send 顶替,就别再往流里发 done/error(否则会误关掉新 run 的流)。
+const runGenBySession = new Map<string, number>();
 
 function sendTo(channel: string, payload: unknown): void {
   if (activeSender && !activeSender.isDestroyed()) activeSender.send(channel, payload);
@@ -337,7 +344,10 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     createAskUserTool({ ask: requestUserAnswer }),
 
     // Skill 原语:按名加载热插拔能力的操作手册(列表每次热读盘)。唯一的 skill 工具,新增 skill 不加任何工具。
-    createUseSkillTool({ list: () => scanSkills(SKILLS_DIR) })
+    createUseSkillTool({ list: () => scanSkills(SKILLS_DIR) }),
+
+    // 跨对话深度回忆:在本 workspace 历史会话里检索(只读)。「近期线索」给被动连续性,这个给主动深挖。
+    createSearchHistoryTool({ sessions: getSessions(wsId), currentSessionId: sessionId })
   ];
   /** 全集:评估器筛选只读子集用 + 适配器初始 tools(send 里会被本轮选择结果覆盖)。 */
   const allTools: AgentTool[] = [...catalog.flatMap((g) => g.tools), ...alwaysOnExtras];
@@ -371,6 +381,8 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     apiKeyResolver: resolveApiKey,
     evaluator,
     planProvider: () => plansBySession.get(sessionId),
+    // 执行轨迹落盘到会话目录(<sessionId>.trace.txt),返回绝对路径供验收器只读读取。
+    writeTrace: (text) => getSessions(wsId).writeTrace(sessionId, text),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
       guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines, shellGuidelines]
@@ -385,7 +397,13 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
     // 当成底层 LLM 报家门,与 Akari 的助理身份冲突;且无任何代码依赖模型自知模型名。
     contextProvider: () =>
       // 注:Skill 清单走这里(每轮重扫=热加载),不进冻结的 system prompt——既保持缓存纪律,又让新装的 skill 下条消息即生效。
-      [buildSessionContext(), memory.render(), renderSkillsForContext(scanSkills(SKILLS_DIR))]
+      // 「近期线索」(滚动会话摘要)同样在此注入,给跨对话连续性;会话内稳定,不破缓存。
+      [
+        buildSessionContext(),
+        memory.render(),
+        renderRecentThreads(getSessions(wsId), sessionId),
+        renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
+      ]
         .filter((s): s is string => Boolean(s && s.trim()))
         .join("\n\n"),
     gatekeeper: createGatekeeper({
@@ -396,11 +414,18 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
           call.tool === "propose_plan" ||
           call.tool === "ask_user" ||
           call.tool === "use_skill" ||
+          call.tool === searchHistoryToolName || // 跨对话回忆,只读
           memoryToolNames.has(call.tool)
         )
           return "ReadOnly";
-        // exec_shell 风险取决于命令内容:纯只读自动跑,写/改/拿不准的走审批
-        if (call.tool === "exec_shell") return classifyShellRisk(String(call.args.command ?? ""));
+        // exec_shell 风险取决于命令内容:纯只读自动跑,写/改/拿不准的走审批。
+        // 各 skill 在 frontmatter 里声明自己 CLI 的"已知安全"命令模式(热扫描),命中即视同只读——
+        // 内核不认识 lark-cli 之类的 skill CLI,由 skill 自己负责声明,加 CLI 不改这里。
+        if (call.tool === "exec_shell")
+          return classifyShellRisk(
+            String(call.args.command ?? ""),
+            scanSkills(SKILLS_DIR).flatMap((s) => s.safeShell)
+          );
         return riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call);
       },
       requestApproval
@@ -492,20 +517,29 @@ export const agent = {
     return { workspaces: list, activeWorkspaceId };
   },
   switchWorkspace(wsId: string): void {
+    onSessionLeave(activeWorkspaceId, activeSessionId); // 离开旧 workspace 的当前会话 → 蒸馏摘要 + 沉淀记忆
     activeWorkspaceId = wsId;
     activeSessionId = "";
     broadcastMemory(wsId);
+    void catchUpSessionMemory(wsId); // 进入新 workspace:补跑它漏掉的离开后处理
+  },
+
+  /** 客户端启动后补跑漏掉的「离开后处理」(退出前没离开的会话等)。由 index.ts 在 app ready 后调。 */
+  catchUpMemory(): void {
+    void catchUpSessionMemory(activeWorkspaceId);
   },
 
   // Session
   listSessions: (): SessionRecord[] => getSessions(activeWorkspaceId).list(),
   createSession(): SessionRecord {
+    onSessionLeave(activeWorkspaceId, activeSessionId); // 离开当前会话 → 蒸馏摘要 + 沉淀记忆
     const rec = getSessions(activeWorkspaceId).create();
     activeSessionId = rec.id;
     return rec;
   },
   /** 打开会话:确保 adapter 已用 transcript 播种,返回重建好的 timeline。 */
   openSession(sessionId: string): unknown[] {
+    if (activeSessionId && activeSessionId !== sessionId) onSessionLeave(activeWorkspaceId, activeSessionId);
     activeSessionId = sessionId;
     getAdapter(sessionId); // 触发播种
     const transcript = getSessions(activeWorkspaceId).loadTranscript(sessionId);
@@ -529,6 +563,8 @@ export const agent = {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
+    const gen = (runGenBySession.get(sessionId) ?? 0) + 1;
+    runGenBySession.set(sessionId, gen);
     const sessions = getSessions(activeWorkspaceId);
 
     let instance: PiAgentAdapter;
@@ -550,6 +586,9 @@ export const agent = {
         instance.setTools(selector(text, prevRecent));
       }
       await instance.startTask({ text, conversationId: newConversationId() });
+      // 被后来的 send 顶替(用户在验收期发了新消息)→ 本轮已被打断,流由新 run 接管,
+      // 这里不再发 done/error,也不抢着落盘(新 run 会落自己的)。
+      if (runGenBySession.get(sessionId) !== gen) return;
       // 落盘:transcript 快照 + 首条用户消息自动命名(先截断占位)
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());
       const placeholder = autoTitle(sessions, sessionId, text);
@@ -684,4 +723,159 @@ async function generateSessionTitle(
   } catch (err) {
     console.warn(`[title] 自动生成标题失败,保留占位: ${String(err)}`);
   }
+}
+
+// ── 滚动会话摘要(第 1 层:跨对话连续性 / 人感)─────────────────────
+// recap = 意图 + 决策(不含结果;结果让用户需要时另查)。离开会话时后台蒸馏,注入新会话的「近期线索」。
+
+const RECENT_THREADS_LIMIT = 4;
+
+/** 从一条消息的 content 抽纯文本(string 或 text 块数组)。 */
+function textFromContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b): b is { type: "text"; text: string } => (b as { type?: string })?.type === "text")
+    .map((b) => b.text)
+    .join("");
+}
+
+/** 把 transcript 压成「以用户为中心」的文本喂给摘要器:用户原话全留,助理只留短文本做消歧,工具噪声丢弃。 */
+function renderTranscriptForDigest(transcript: unknown): string {
+  if (!Array.isArray(transcript)) return "";
+  const lines: string[] = [];
+  for (const raw of transcript as { role?: string; content?: unknown }[]) {
+    const text = textFromContent(raw.content).trim();
+    if (!text) continue;
+    if (raw.role === "user") lines.push(`用户: ${text}`);
+    else if (raw.role === "assistant") lines.push(`助理: ${text.length > 160 ? text.slice(0, 160) + "…" : text}`);
+    else if (text.startsWith("用户回答")) lines.push(`决策: ${text}`); // ask_user 的回答 = 用户决策信号
+  }
+  return lines.join("\n");
+}
+
+/** 蒸馏某会话的「意图+决策」摘要。LLM 出错会抛(由 processSessionOnLeave 决定是否标记已处理)。 */
+async function generateSessionDigest(sessions: SessionStore, sessionId: string): Promise<void> {
+  const body = renderTranscriptForDigest(sessions.loadTranscript(sessionId));
+  if (!body.split("\n").some((l) => l.startsWith("用户:"))) return; // 没有用户实质输入 → 不值得摘要
+  const model = createModel({ provider: PROVIDER, modelId: MODEL });
+  const apiKey = await resolveApiKey(PROVIDER);
+  const raw = await generateText(model, {
+    apiKey,
+    maxTokens: 160,
+    system:
+      "你是会话摘要器,为「跨对话记忆」服务。只关心两件事:用户的**意图**(想达成什么)和**决策**(定了什么)。" +
+      "助理的长篇输出只用来理解用户的话,不要复述它。忽略寒暄与过程细节,**不要写结果/成败**(用户需要时会另查)。" +
+      "最多输出 3 行,每行一句中文,形如「意图:…」「决策:…」;若没有明确的意图或决策,只输出一个字:无。",
+    prompt: body.slice(0, 6000)
+  });
+  const digest = raw.trim();
+  if (!digest || digest === "无") return;
+  sessions.setDigest(sessionId, digest);
+  broadcast("session:changed", sessions.list());
+}
+
+/**
+ * 主动记忆形成(第 2 层):会话收尾时**保守地**把值得长期记住的(稳定偏好/在推进的项目/影响以后做法的决策)
+ * 沉淀进 Personal Memory,作为模型 inline `remember` 的兜底。去重 + 默认不记,避免常驻注入的记忆臃肿
+ * (彻底的合并剪枝留给第 4 层 dream)。
+ */
+async function promoteSessionMemories(wsId: string, sessionId: string): Promise<void> {
+  const memory = getMemory(wsId);
+  const body = renderTranscriptForDigest(getSessions(wsId).loadTranscript(sessionId));
+  if (!body.split("\n").some((l) => l.startsWith("用户:"))) return; // 没有用户实质输入 → 不沉淀
+  const existing = memory.list();
+  const existingList = existing.map((m) => `- ${m.content}`).join("\n") || "(暂无)";
+  const model = createModel({ provider: PROVIDER, modelId: MODEL });
+  const apiKey = await resolveApiKey(PROVIDER);
+  const raw = await generateText(model, {
+    apiKey,
+    maxTokens: 200,
+    system:
+      "你在一段对话收尾时,判断有没有**值得长期记住**的、关于这位用户的信息——稳定的偏好/习惯、在推进的项目或目标、" +
+      "影响以后做法的决策。**只记跨会话还有用的;一次性的任务细节不要记**(那些能另查)。已经记过的不要重复或换汤不换药地再记。" +
+      "最多 3 条,拿不准就少记或不记。每条输出一行,格式 `偏好|内容` 或 `事实|内容`(内容简洁具体一句话);" +
+      "没有任何值得记的就只输出一个字:无。",
+    prompt: `已经记过的(别重复):\n${existingList}\n\n本次对话:\n${body.slice(0, 6000)}`
+  });
+  const out = raw.trim();
+  if (!out || out === "无") return;
+  const seen = new Set(existing.map((m) => m.content.trim().toLowerCase()));
+  let added = 0;
+  for (const line of out.split(/\r?\n/)) {
+    const m = line.match(/^\s*(偏好|事实)\s*[|｜:：]\s*(.+)$/);
+    const content = m?.[2]?.trim();
+    if (!m || !content || seen.has(content.toLowerCase())) continue;
+    memory.add({
+      kind: m[1] === "偏好" ? "preference" : "fact",
+      content,
+      situation: "会话收尾自动沉淀",
+      sourceSessionId: sessionId
+    });
+    seen.add(content.toLowerCase());
+    if (++added >= 3) break;
+  }
+  if (added) broadcastMemory(wsId);
+}
+
+/**
+ * 离开某会话后的处理:蒸馏「近期线索」+ 沉淀值得长期记的记忆。两者都成功(或合法地无内容跳过)才
+ * markDigested;若 LLM 出错则不标记,留待客户端下次启动补跑(见 catchUpSessionMemory)。幂等:摘要覆盖、沉淀去重。
+ */
+async function processSessionOnLeave(wsId: string, sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  const sessions = getSessions(wsId);
+  try {
+    await Promise.all([generateSessionDigest(sessions, sessionId), promoteSessionMemories(wsId, sessionId)]);
+    sessions.markDigested(sessionId);
+  } catch (err) {
+    console.warn(`[session-leave] 处理失败,留待重启补跑: ${String(err)}`);
+  }
+}
+
+/** 离开某会话(切走/新建/换 workspace)时触发(后台、不阻塞)。 */
+function onSessionLeave(wsId: string, sessionId: string): void {
+  void processSessionOnLeave(wsId, sessionId);
+}
+
+/**
+ * 客户端重启补跑:把"离开没跑成"的会话(尤其退出前从没离开过的当前会话、或 LLM 当时出错的)补上。
+ * 顺序跑、限最近若干个(避免首次铺开时一次性轰炸 + 老会话本就不进近期线索)。
+ */
+async function catchUpSessionMemory(wsId: string): Promise<void> {
+  const pending = getSessions(wsId).needingDigest(8, activeSessionId);
+  for (const rec of pending) await processSessionOnLeave(wsId, rec.id);
+}
+
+/** 时间戳现算成口语相对标签 + 紧凑绝对日期(如「昨天·6/1」)。注入当下计算,永不过期。 */
+function relativeDayLabel(ts: number, now: number): string {
+  const d = new Date(ts);
+  const md = `${d.getMonth() + 1}/${d.getDate()}`;
+  const startOfDay = (t: number): number => {
+    const x = new Date(t);
+    x.setHours(0, 0, 0, 0);
+    return x.getTime();
+  };
+  const days = Math.round((startOfDay(now) - startOfDay(ts)) / 86400000);
+  let rel: string;
+  if (days <= 0) rel = "今天";
+  else if (days === 1) rel = "昨天";
+  else if (days === 2) rel = "前天";
+  else if (days < 7) rel = `${days}天前`;
+  else if (days < 14) rel = "上周";
+  else if (days < 30) rel = `${Math.floor(days / 7)}周前`;
+  else if (days < 365) rel = `${Math.floor(days / 30)}个月前`;
+  else rel = `${Math.floor(days / 365)}年前`;
+  return `${rel}·${md}`;
+}
+
+/** 「近期线索」注入块:本 workspace 最近 N 条带摘要的会话(排除当前),带相对时间戳。 */
+function renderRecentThreads(sessions: SessionStore, currentId: string): string | undefined {
+  const recent = sessions.recentWithDigest(RECENT_THREADS_LIMIT, currentId);
+  if (!recent.length) return undefined;
+  const now = Date.now();
+  const lines = recent.map(
+    (r) => `- [${relativeDayLabel(r.updatedAt, now)}] ${(r.digest ?? "").replace(/\s*\n\s*/g, " · ")}`
+  );
+  return `# 近期线索(你和这位用户最近聊过的,可据此主动接上话头;细节可让用户提示或另查)\n${lines.join("\n")}`;
 }

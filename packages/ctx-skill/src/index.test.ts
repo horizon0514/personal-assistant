@@ -24,6 +24,12 @@ beforeAll(() => {
   // 无 frontmatter:name 退回目录名,description 为空,正文=全文
   mkdirSync(join(root, "plain"));
   writeFileSync(join(root, "plain", "SKILL.md"), `just a body`);
+  // 带 safeShell 列表 frontmatter 的 skill
+  mkdirSync(join(root, "withsafe"));
+  writeFileSync(
+    join(root, "withsafe", "SKILL.md"),
+    `---\nname: withsafe\ndescription: 带安全命令声明\nsafeShell:\n  - 'foo-cli status'\n  - 'foo-cli * +*search*'\n---\n# 正文`
+  );
   // 没有 SKILL.md 的目录:跳过
   mkdirSync(join(root, "empty-dir"));
 });
@@ -33,7 +39,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe("scanSkills", () => {
   it("发现带 SKILL.md 的目录,解析 frontmatter,跳过无 md 的目录", () => {
     const skills = scanSkills(root);
-    expect(skills.map((s) => s.name)).toEqual(["fei-shu", "plain"]); // 按名排序,empty-dir 被跳过
+    expect(skills.map((s) => s.name)).toEqual(["fei-shu", "plain", "withsafe"]); // 按名排序,empty-dir 被跳过
     const fs = skills.find((s) => s.name === "fei-shu")!;
     expect(fs.description).toBe("飞书操作");
     expect(fs.body).toContain("用 lark-cli 发消息");
@@ -45,19 +51,34 @@ describe("scanSkills", () => {
     expect(plain.body).toBe("just a body");
   });
 
+  it("解析 safeShell 列表(去引号),其余单行 key 不受影响;无声明则为空数组", () => {
+    const skills = scanSkills(root);
+    const ws = skills.find((s) => s.name === "withsafe")!;
+    expect(ws.description).toBe("带安全命令声明"); // 列表块不吞掉相邻单行 key
+    expect(ws.safeShell).toEqual(["foo-cli status", "foo-cli * +*search*"]);
+    expect(ws.body).toContain("正文");
+    expect(skills.find((s) => s.name === "plain")!.safeShell).toEqual([]);
+  });
+
   it("目录不存在返回空数组", () => {
     expect(scanSkills(join(root, "nope"))).toEqual([]);
   });
 });
 
 describe("renderSkillsForContext", () => {
-  it("空列表渲染为空串(不污染上下文)", () => {
+  it("空列表且无 skillsDir → 空串(不污染上下文)", () => {
     expect(renderSkillsForContext([])).toBe("");
   });
   it("非空时含每个 skill 的名与描述", () => {
     const out = renderSkillsForContext(scanSkills(root));
     expect(out).toContain("可用 Skill");
     expect(out).toContain("**fei-shu**:飞书操作");
+  });
+  it("传 skillsDir 时附「如何自己创建 Skill」说明(含路径+热加载),哪怕没有 skill", () => {
+    const out = renderSkillsForContext([], "/data/skills");
+    expect(out).toContain("自己创建 Skill");
+    expect(out).toContain("/data/skills/<英文短名>/SKILL.md");
+    expect(out).toContain("下一条消息"); // 热加载说明
   });
 });
 

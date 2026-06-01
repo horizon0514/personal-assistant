@@ -225,17 +225,39 @@ function hasWriteRedirect(cmd: string): boolean {
 }
 
 /**
+ * 把 skill 声明的安全命令模式(glob,`*` 通配)编译成前缀匹配正则。
+ * 语义:从命令开头匹配(尾部可带额外 flag/参数),`*` 匹配任意字符。escape 其余正则元字符。
+ * 例:`lark-cli * +*search*` 命中 `lark-cli contact +search-user --query x`。
+ */
+function compileSafePattern(glob: string): RegExp {
+  const escaped = glob
+    .trim()
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&") // 转义正则元字符(保留 *)
+    .replace(/\*/g, ".*");
+  return new RegExp("^" + escaped);
+}
+
+/**
  * 按命令内容判定 exec_shell 的风险:纯只读且无写入副作用 → ReadOnly(自动执行);
  * 其余(写文件、改状态、命令替换、不在白名单)→ Destructive(走审批)。保守:拿不准一律审批。
+ *
+ * @param safePatterns skill 在 frontmatter 里声明的"本 skill 已知安全"的命令模式(glob)。
+ *   内核不认识各 skill 带的 CLI(如 lark-cli),由 skill 自己声明哪些子命令只读;
+ *   命中的命令段视同只读自动跑。**硬危险项(命令替换/sudo/写重定向)不被 safePatterns 豁免**。
  */
-export function classifyShellRisk(command: string): RiskLevel {
+export function classifyShellRisk(command: string, safePatterns: readonly string[] = []): RiskLevel {
   const cmd = command.trim();
   if (!cmd) return "Destructive";
-  // 命令替换可能藏写操作,sudo 永远要确认;直接保守审批
+  // 命令替换可能藏写操作,sudo 永远要确认;写重定向落盘——这些是硬地板,skill 也豁免不了。
   if (/\$\(|`/.test(cmd) || /(^|\s)sudo(\s|$)/.test(cmd)) return "Destructive";
   if (hasWriteRedirect(cmd)) return "Destructive";
+  const safe = safePatterns.map(compileSafePattern);
+  const segOk = (seg: string): boolean => {
+    const s = seg.trim();
+    return segmentIsReadOnly(s) || safe.some((re) => re.test(s));
+  };
   const segments = cmd.split(/&&|\|\||[;|]|\n/);
-  return segments.every(segmentIsReadOnly) ? "ReadOnly" : "Destructive";
+  return segments.every(segOk) ? "ReadOnly" : "Destructive";
 }
 
 export const shellGuidelines = `## Shell 执行

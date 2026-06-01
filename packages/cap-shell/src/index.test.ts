@@ -41,13 +41,45 @@ describe("classifyShellRisk", () => {
     "git remote add origin url",
     "git stash",
     "git config user.name x",
-    "git worktree list"
+    "git worktree list",
+    // 内核不认识 skill 带的 CLI(如 lark-cli):不传 safePatterns 时一律审批
+    'lark-cli im +messages-send --user-id ou_x --text "hi"',
+    "lark-cli auth status"
   ])("写/改/拿不准的命令走审批: %s", (cmd) => {
     expect(classifyShellRisk(cmd)).toBe("Destructive");
   });
 
   it("空命令保守判为 Destructive", () => {
     expect(classifyShellRisk("   ")).toBe("Destructive");
+  });
+});
+
+describe("classifyShellRisk + skill 声明的 safePatterns", () => {
+  // 飞书 skill 声明的只读模式样例(实际写在 SKILL.md frontmatter)
+  const larkSafe = ["lark-cli auth status", "lark-cli * +*search*", "lark-cli * +agenda", "lark-cli api GET *"];
+
+  it.each([
+    "lark-cli auth status",
+    'lark-cli contact +search-user --query "黄思远"',
+    'lark-cli im +messages-search --query "关键词"',
+    "lark-cli calendar +agenda",
+    "lark-cli api GET /open-apis/contact/v3/users/me"
+  ])("命中 safePatterns → 自动跑: %s", (cmd) => {
+    expect(classifyShellRisk(cmd, larkSafe)).toBe("ReadOnly");
+  });
+
+  it.each([
+    'lark-cli im +messages-send --user-id ou_x --text "hi"', // 写:未命中只读模式
+    "lark-cli auth login", // 拉浏览器:未命中
+    "lark-cli api POST /open-apis/im/v1/messages" // 非 GET:未命中
+  ])("未命中 safePatterns 的写操作仍审批: %s", (cmd) => {
+    expect(classifyShellRisk(cmd, larkSafe)).toBe("Destructive");
+  });
+
+  it("硬危险项不被 safePatterns 豁免(命令替换/sudo/写重定向/复合段)", () => {
+    expect(classifyShellRisk("lark-cli api GET $(rm -rf x)", larkSafe)).toBe("Destructive");
+    expect(classifyShellRisk("lark-cli auth status && rm -rf /tmp/x", larkSafe)).toBe("Destructive");
+    expect(classifyShellRisk("lark-cli auth status > steal.txt", larkSafe)).toBe("Destructive");
   });
 });
 

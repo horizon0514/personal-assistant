@@ -283,7 +283,9 @@ export function ChatPane(): JSX.Element {
       return;
     }
 
-    if (streaming) return;
+    // 自查/返工期间(reviewState 非 idle)final 汇报早已流式呈现,放用户发新消息——
+    // 这等于"这版我认了 / 换个方向",后端会打断验收闭环、按新消息接着开。其余流式态仍拦着。
+    if (streaming && reviewState === "idle") return;
     // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
     if (!activeSessionId) sentIntoNewSession.current = true;
     setItems((prev) => [
@@ -293,6 +295,7 @@ export function ChatPane(): JSX.Element {
     ]);
     setInput("");
     setStreaming(true);
+    setReviewState("idle"); // 若是在自查/返工期发的:本轮验收即将被后端打断,先把指示器收掉
     void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text));
   };
 
@@ -383,7 +386,7 @@ export function ChatPane(): JSX.Element {
                 }
               }}
             />
-            {streaming && !pendingPlanFeedbackId ? (
+            {streaming && reviewState === "idle" && !pendingPlanFeedbackId ? (
               <button
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-700 text-white transition hover:bg-stone-800 dark:bg-ink-700 dark:hover:bg-ink-600"
                 onClick={stop}

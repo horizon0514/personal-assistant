@@ -1,6 +1,16 @@
 ---
 name: fei-shu
 description: 飞书(Lark)操作——发消息、搜消息/群、查日程、搜同事等,底层调本机 lark-cli。
+safeShell:
+  - 'lark-cli auth status'
+  - 'lark-cli --help'
+  - 'lark-cli * --help'
+  - 'lark-cli * +*search*'
+  - 'lark-cli * +*list*'
+  - 'lark-cli * +get*'
+  - 'lark-cli * +agenda'
+  - 'lark-cli * +freebusy'
+  - 'lark-cli api GET *'
 ---
 # 飞书 Skill
 

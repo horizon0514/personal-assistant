@@ -5,7 +5,7 @@
  */
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { readJson, writeJson } from "./persistence";
+import { readJson, writeJson, writeText } from "./persistence";
 
 export interface SessionRecord {
   id: string;
@@ -14,6 +14,16 @@ export interface SessionRecord {
   updatedAt: number;
   /** 已归档:不在会话列表展示,但 transcript 保留(不删)。 */
   archived?: boolean;
+  /**
+   * 滚动会话摘要:本会话的「意图 + 决策」(≤3 行,不含结果)。离开会话时蒸馏生成,
+   * 注入新会话的「近期线索」给跨对话连续性(人感)。时间用 updatedAt 现算相对值。
+   */
+  digest?: string;
+  /**
+   * 上次跑完「离开后处理」(蒸馏摘要 + 沉淀记忆)的时间。`updatedAt > digestedAt` 即说明
+   * 会话在处理后又有新内容(或从未处理过)——客户端重启时据此补跑漏掉的(如退出前没"离开")。
+   */
+  digestedAt?: number;
 }
 
 export class SessionStore {
@@ -40,6 +50,18 @@ export class SessionStore {
 
   private transcriptPath(id: string): string {
     return join(this.workspaceDir, "sessions", `${id}.json`);
+  }
+
+  /** 本会话执行轨迹文件的绝对路径(供验收器/执行器用只读工具读取)。 */
+  tracePath(id: string): string {
+    return join(this.workspaceDir, "sessions", `${id}.trace.txt`);
+  }
+
+  /** 覆写本会话当前任务的执行轨迹(可读文本,已带不可信围栏)。返回落盘路径。 */
+  writeTrace(id: string, content: string): string {
+    const p = this.tracePath(id);
+    writeText(p, content);
+    return p;
   }
 
   /** 未归档会话,按最近活跃倒序。 */
@@ -92,9 +114,44 @@ export class SessionStore {
     return readJson<{ transcript?: unknown }>(this.transcriptPath(id), {}).transcript;
   }
 
+  /** 写入会话摘要。**不**碰 updatedAt——蒸馏发生在"离开后",不算一次活动,不该重排会话。 */
+  setDigest(id: string, digest: string): void {
+    const rec = this.records.find((r) => r.id === id);
+    if (rec) {
+      rec.digest = digest;
+      this.persist();
+    }
+  }
+
+  /** 标记「离开后处理」已跑完(不碰 updatedAt)。供重启补跑判断哪些会话还没处理。 */
+  markDigested(id: string): void {
+    const rec = this.records.find((r) => r.id === id);
+    if (rec) {
+      rec.digestedAt = this.tick();
+      this.persist();
+    }
+  }
+
+  /** 需补跑「离开后处理」的未归档会话(更新晚于上次处理 / 从未处理),最近优先。 */
+  needingDigest(limit: number, excludeId?: string): SessionRecord[] {
+    return this.records
+      .filter((r) => !r.archived && r.id !== excludeId && r.updatedAt > (r.digestedAt ?? 0))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, Math.max(0, limit));
+  }
+
+  /** 最近有摘要的未归档会话(倒序),供「近期线索」注入;排除当前会话。 */
+  recentWithDigest(limit: number, excludeId?: string): SessionRecord[] {
+    return this.records
+      .filter((r) => !r.archived && r.digest && r.id !== excludeId)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, Math.max(0, limit));
+  }
+
   remove(id: string): void {
     this.records = this.records.filter((r) => r.id !== id);
     this.persist();
     rmSync(this.transcriptPath(id), { force: true });
+    rmSync(this.tracePath(id), { force: true });
   }
 }

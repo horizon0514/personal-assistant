@@ -26,17 +26,38 @@ export interface Skill {
   readonly body: string;
   /** skill 目录绝对路径(脚本相对它定位) */
   readonly dir: string;
+  /**
+   * 本 skill 声明「已知安全(只读、无副作用)」的 shell 命令模式(glob,`*` 通配)。
+   * 内核不认识各 skill 带的 CLI,命中这些模式的 exec_shell 命令自动跑、不弹审批;
+   * 未声明的(发消息/创建/删除/登录等)仍走审批。在 frontmatter 里写成 YAML 列表。
+   */
+  readonly safeShell: string[];
 }
 
-/** 解析 SKILL.md:取 `--- key: value ---` frontmatter 的 name/description,其余为正文。 */
+/** 解析 SKILL.md frontmatter:支持单行 `key: value` 与列表块(`key:` 后续缩进 `- item` 行,如 safeShell)。 */
 function parseSkill(raw: string, dirName: string, dir: string): Skill {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   const meta: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
   let body = raw;
   if (m && m[1] !== undefined && m[2] !== undefined) {
+    let current: string[] | undefined; // 正在累积的列表(遇到非 `- ` 行即结束)
     for (const line of m[1].split(/\r?\n/)) {
+      const listItem = line.match(/^\s+-\s+(.*)$/);
+      if (current && listItem) {
+        current.push((listItem[1] ?? "").trim().replace(/^['"]|['"]$/g, "")); // 去掉可选引号
+        continue;
+      }
+      current = undefined;
       const i = line.indexOf(":");
-      if (i > 0) meta[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+      if (i <= 0) continue;
+      const key = line.slice(0, i).trim();
+      const val = line.slice(i + 1).trim();
+      if (val === "") {
+        current = lists[key] = []; // 值为空 → 列表块起头,后续 `- item` 行累积进来
+      } else {
+        meta[key] = val;
+      }
     }
     body = m[2];
   }
@@ -44,7 +65,8 @@ function parseSkill(raw: string, dirName: string, dir: string): Skill {
     name: meta.name || dirName,
     description: meta.description || "",
     body: body.trim(),
-    dir
+    dir,
+    safeShell: lists.safeShell ?? []
   };
 }
 
@@ -74,13 +96,25 @@ export function scanSkills(rootDir: string): Skill[] {
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** 渲染注入上下文的「可用 Skill」清单(渐进披露:只给一句话摘要,正文按需 use_skill 取)。 */
-export function renderSkillsForContext(skills: Skill[]): string {
-  if (skills.length === 0) return "";
-  const lines = skills.map((s) => `- **${s.name}**:${s.description}`).join("\n");
-  return `# 可用 Skill(热插拔能力)
-除内置工具外,你还有下列按需加载的 Skill。看到与当前任务相关的,先用 use_skill 读取它的操作手册,再照手册用已有工具(多为 exec_shell)执行;不相关就忽略。
-${lines}`;
+/**
+ * 渲染注入上下文的「可用 Skill」清单(渐进披露:只给一句话摘要,正文按需 use_skill 取)。
+ * 传 skillsDir 时,附上"如何自己创建 Skill"的说明——能力靠 Skill 热生长,模型该知道这条路。
+ */
+export function renderSkillsForContext(skills: Skill[], skillsDir?: string): string {
+  if (skills.length === 0 && !skillsDir) return ""; // 既无 skill 又不讲创建 → 不污染上下文
+  const head = "# 可用 Skill(热插拔能力)";
+  const intro =
+    "除内置工具外,你还有下列按需加载的 Skill。看到与当前任务相关的,先用 use_skill 读取它的操作手册,再照手册用已有工具(多为 exec_shell)执行;不相关就忽略。";
+  const lines = skills.length
+    ? skills.map((s) => `- **${s.name}**:${s.description}`).join("\n")
+    : "(当前没有已安装的 Skill)";
+  // 如何自己造 Skill:这是真能力,不是做不到的事。目录每条消息都会重扫(热加载)。
+  const authoring = skillsDir
+    ? `\n\n## 你可以自己创建 Skill(沉淀可复用的操作流程)
+当某套操作(尤其包某个 CLI、固定步骤)以后还会用到,就把它沉淀成一个 Skill:用 write_file 写 \`${skillsDir}/<英文短名>/SKILL.md\`,带 frontmatter(\`name\`、\`description\`;可选 \`safeShell:\` 列表声明该 CLI 的只读命令好让它们免审批)。
+这个目录**每条消息都会被重新扫描**(热加载):写好后**下一条消息**它就出现在上面的清单里;当轮想立刻用,直接 \`use_skill(那个名字)\` 也能按名读盘加载。所以「自己造能力」对你是成立的——别说做不到。`
+    : "";
+  return `${head}\n${intro}\n${lines}${authoring}`;
 }
 
 export interface UseSkillDeps {

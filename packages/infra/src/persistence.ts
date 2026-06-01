@@ -17,3 +17,9 @@ export function writeJson(filePath: string, data: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
+
+/** 写纯文本(目录惰性创建)。用于落盘可读文本工件,如执行轨迹。 */
+export function writeText(filePath: string, content: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, content);
+}
