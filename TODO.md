@@ -100,6 +100,15 @@
 - [ ] **相关性召回**:记忆/文件变多时,按相关性挑选注入,而非全量塞 prompt。
 - [ ] **采用 agentic search(grep)而非向量 RAG**:让 agent 用搜索工具(grep/glob)按需查找,而不是预建向量索引。理由:本地文件常变(索引易失效)、需要精确匹配(符号/字符串)、模型可多步推理"去哪找"、零索引基建。先加 filesystem 搜索能力(content grep + 文件名 glob);记忆召回同理用 search_memory(关键词)。真正需要语义相似度时再考虑 embedding,但不预先上 RAG。
 
+## 跨对话记忆 / 人感(本轮 2026-06-01;详见 memory `cross-conversation-memory`)
+
+> 已落地:第1层 滚动会话摘要(意图+决策,离开蒸馏,注入「近期线索」带相对时间戳)、第3层 search_history(历史 transcript 关键词检索)、第2层 主动记忆形成(扩 remember + 会话收尾保守沉淀)、客户端重启补跑(digestedAt/needingDigest 懒触发)、skill 热加载认知纠正(告诉模型可自建 skill)。
+
+- [ ] **撤掉/瘦身 `[browser-activity]` 诊断日志**:`browser-manager.ts` 里 `ensureWebview` 的调用栈打印 + 各工具入口的 `[browser-activity]` 行,是排查"发飞书却弹浏览器"时加的临时观测。根因已修(`read_current_page` 没页面不再拉空面板)。决定:全撤,或留轻量版(去掉栈打印、只留一行)。
+- [ ] **同步 memory `cross-conversation-memory`**:把本轮进展补进那条记忆——第1/3/2 层均已落地、客户端重启懒触发补跑已实现、skill 热加载认知已纠正;capstone 第4层 dream 仍待攒料。
+
+> 第4层 dream(离线消化/反思,自我进化引擎)的设计已记在 memory `cross-conversation-memory`,攒够真实会话/反馈后再启动,此处不重列。
+
 ## Agent harness 行为(自建 harness 时打磨)
 
 > 启示与优先级见 [`research/agent-design-insights.md`](research/agent-design-insights.md)(对照 Anthropic 两篇工程文章)。建议落地顺序:trace → 子 Agent → 独立 evaluator + Sprint Contract → context reset → ACI 错误引导。

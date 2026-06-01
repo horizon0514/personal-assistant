@@ -150,9 +150,10 @@ export function ChatPane(): JSX.Element {
         setReviewState("reviewing");
       } else if (ev.type === "EvaluationCompleted") {
         if (ev.retrying) {
-          // 返工:把状态切到"在修一些问题",并补一个空 assistant 气泡让下一轮的回答落进去
+          // 乐观流式回滚:这段已流式呈现的 final 汇报未通过自查 → 撤回(清空该气泡),
+          // 状态切到"在修一些问题",修正版本随后流式补入同一气泡。
           setReviewState("retrying");
-          setItems((prev) => [...prev, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }]);
+          setItems((prev) => clearLastAssistant(prev));
         } else {
           // 通过 / 已耗尽 retry:收掉指示器,pendingFinal 由 ctx-task flush 进当前 assistant 气泡
           setReviewState("idle");
@@ -282,7 +283,9 @@ export function ChatPane(): JSX.Element {
       return;
     }
 
-    if (streaming) return;
+    // 自查/返工期间(reviewState 非 idle)final 汇报早已流式呈现,放用户发新消息——
+    // 这等于"这版我认了 / 换个方向",后端会打断验收闭环、按新消息接着开。其余流式态仍拦着。
+    if (streaming && reviewState === "idle") return;
     // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
     if (!activeSessionId) sentIntoNewSession.current = true;
     setItems((prev) => [
@@ -292,6 +295,7 @@ export function ChatPane(): JSX.Element {
     ]);
     setInput("");
     setStreaming(true);
+    setReviewState("idle"); // 若是在自查/返工期发的:本轮验收即将被后端打断,先把指示器收掉
     void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text));
   };
 
@@ -382,7 +386,7 @@ export function ChatPane(): JSX.Element {
                 }
               }}
             />
-            {streaming && !pendingPlanFeedbackId ? (
+            {streaming && reviewState === "idle" && !pendingPlanFeedbackId ? (
               <button
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-700 text-white transition hover:bg-stone-800 dark:bg-ink-700 dark:hover:bg-ink-600"
                 onClick={stop}
@@ -627,6 +631,19 @@ function appendToLastAssistant(items: TimelineItem[], text: string): TimelineIte
     return next;
   }
   return [...items, { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: text }];
+}
+
+/** 撤回最后一条 assistant 气泡的内容(乐观流式回滚:清空未通过自查的 final 汇报,修正版本将流式补入)。 */
+function clearLastAssistant(items: TimelineItem[]): TimelineItem[] {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it && it.kind === "msg" && it.role === "assistant") {
+      const next = items.slice();
+      next[i] = { ...it, content: "" };
+      return next;
+    }
+  }
+  return items;
 }
 
 /** 按 stepId 归组插入/更新动作:已有 step 块则追加,否则新建带递增序号的 step 块 */

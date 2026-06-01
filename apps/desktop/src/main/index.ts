@@ -4,6 +4,7 @@ import { userInfo } from "node:os";
 import { execFileSync } from "node:child_process";
 import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import { registerIpc } from "./ipc";
+import { agent } from "./agent";
 import { setMainWindow } from "./main-window";
 import { installAppMenu } from "./menu";
 import { appSettings, type ThemeSource } from "./app-settings";
@@ -120,6 +121,8 @@ app.whenReady().then(() => {
   installAppMenu(openSettings, checkForUpdatesManual);
   createWindow();
   initAutoUpdate();
+  // 启动补跑:把退出前没"离开"、漏掉蒸馏/沉淀的会话补上(延迟一会,避开启动繁忙)。
+  setTimeout(() => agent.catchUpMemory(), 4000);
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

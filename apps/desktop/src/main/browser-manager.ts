@@ -48,8 +48,29 @@ export class BrowserManager implements BrowserController {
     });
   }
 
+  /**
+   * 调研浏览器活动日志:定位「是谁 / 为什么把这个内置浏览器拉起来了」。
+   * 复现时如果发某飞书消息却弹了浏览器——看控制台有没有 [browser-activity]:
+   * 有 → 是 Akari 调研浏览器,stack 能指出哪条工具链触发;无 → 是 lark-cli 自己弹的 OAuth 页。
+   */
+  private logAct(action: string, detail = ""): void {
+    console.log(`[browser-activity] ${action}${detail ? " " + detail : ""}`);
+  }
+
+  /** 截调用栈(去掉本文件内层帧),看清是哪条工具/路径把浏览器带起来的。 */
+  private callerStack(): string {
+    const raw = new Error().stack ?? "";
+    return raw
+      .split("\n")
+      .slice(2, 9)
+      .map((l) => "      " + l.trim())
+      .join("\n");
+  }
+
   /** 让面板挂载/显示 <webview> 并拿到其 webContents(已就绪则立即返回)。 */
   private async ensureWebview(): Promise<WebContents> {
+    const mounted = Boolean(this.webview && !this.webview.isDestroyed());
+    this.logAct("ensureWebview → 请求显示可见浏览器面板", `(webview已挂载=${mounted})\n${this.callerStack()}`);
     getMainWebContents()?.send("browser:show"); // 通知渲染层打开「浏览器」artifact(挂载 webview)
     if (this.webview && !this.webview.isDestroyed()) return this.webview;
     return new Promise<WebContents>((resolve, reject) => {
@@ -71,6 +92,7 @@ export class BrowserManager implements BrowserController {
   /** 在指定 webContents 上加载 URL,等待完成(带超时 + 中断)。可见 webview 与隐藏抓取窗口共用。 */
   private async loadUrl(wc: WebContents, url: string, signal?: AbortSignal): Promise<void> {
     if (signal?.aborted) throw new Error("已取消");
+    this.logAct("loadURL", url);
     const load = wc.loadURL(url).catch((err: { code?: string }) => {
       if (err?.code && err.code !== "ERR_ABORTED") throw err;
     });
@@ -96,6 +118,7 @@ export class BrowserManager implements BrowserController {
   }
 
   async search(query: string, limit: number, signal?: AbortSignal): Promise<SearchHit[]> {
+    this.logAct("web_search", JSON.stringify(query));
     const wc = await this.navigate(SEARCH_URL(query), signal);
     const hits = (await wc.executeJavaScript(
       `(() => {
@@ -253,6 +276,7 @@ export class BrowserManager implements BrowserController {
   }
 
   async click(selector: string, signal?: AbortSignal): Promise<{ url: string }> {
+    this.logAct("browser_click", selector);
     const wc = await this.currentWebview(signal);
     const loc = await this.locate(wc, selector);
     if (!loc.found) throw new Error(`找不到元素:${selector}`);
@@ -277,6 +301,7 @@ export class BrowserManager implements BrowserController {
     opts: { clear?: boolean; submit?: boolean },
     signal?: AbortSignal
   ): Promise<{ url: string }> {
+    this.logAct("browser_type", selector);
     const wc = await this.currentWebview(signal);
     // 1. 定位 + 滚动到可见,拿可点中心坐标(后面用真实鼠标点击来「真聚焦」)。
     const loc = await this.locate(wc, selector);
@@ -340,6 +365,7 @@ export class BrowserManager implements BrowserController {
   }
 
   async waitFor(selector: string, timeoutMs: number, signal?: AbortSignal): Promise<{ found: boolean }> {
+    this.logAct("waitFor", selector);
     const wc = await this.currentWebview(signal);
     const deadline = Date.now() + Math.max(0, timeoutMs);
     do {
@@ -356,6 +382,7 @@ export class BrowserManager implements BrowserController {
 
 
   async screenshot(signal?: AbortSignal): Promise<{ data: string; url: string }> {
+    this.logAct("browser_screenshot");
     const wc = await this.currentWebview(signal);
     this.ensureDebugger(wc);
     const res = (await wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" })) as {
@@ -381,6 +408,7 @@ export class BrowserManager implements BrowserController {
 
   /** 新建一个隐藏抓取窗口,登记到池计数并挂好回收/崩溃清理。 */
   private createFetchWindow(): BrowserWindow {
+    this.logAct("createFetchWindow", "新建隐藏抓取窗口(web_fetch 用,不显示面板)");
     const win = new BrowserWindow({
       show: false,
       webPreferences: {
@@ -463,6 +491,7 @@ export class BrowserManager implements BrowserController {
    * 满了排队,闲置窗口超 FETCH_IDLE_TTL_MS 自动销毁释放内存。
    */
   async fetch(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+    this.logAct("web_fetch", url);
     if (signal?.aborted) throw new Error("已取消");
     const win = await this.acquireFetchWindow(signal);
     try {
@@ -477,6 +506,7 @@ export class BrowserManager implements BrowserController {
 
   /** 在可见 webview 里打开 URL 并读正文:供需登录/验证或用户想亲自看页面时用(与后台 fetch 相对)。 */
   async open(url: string, signal?: AbortSignal): Promise<FetchedPage> {
+    this.logAct("browser_open", url);
     const wc = await this.navigate(url, signal);
     await new Promise((r) => setTimeout(r, 400)); // 给 SPA 一点渲染时间
     return this.readReadable(wc);
@@ -484,7 +514,14 @@ export class BrowserManager implements BrowserController {
 
   /** 读当前 webview 正在显示的页面(用户可能手动导航过来的),不触发导航。 */
   async current(signal?: AbortSignal): Promise<FetchedPage> {
-    const wc = await this.currentWebview(signal);
-    return this.readReadable(wc);
+    this.logAct("read_current_page");
+    if (signal?.aborted) throw new Error("已取消");
+    // read_current_page = 读「当前正显示」的页面。没有已挂载的可见页面时,直接如实说明现状,
+    // **绝不**为此调 ensureWebview 把空浏览器面板拉起来——否则只想核查的调用方(如独立验收器)
+    // 会凭空弹出一个空浏览器(见 [browser-activity] 复现:evaluator→read_current_page→ensureWebview)。
+    if (!this.webview || this.webview.isDestroyed()) {
+      return { title: "", url: "", text: "(内置浏览器当前没有打开任何页面)" };
+    }
+    return this.readReadable(this.webview);
   }
 }

@@ -67,6 +67,49 @@ describe("SessionStore", () => {
     expect(s.loadTranscript(rec.id)).toBeUndefined();
   });
 
+  it("setDigest 持久化但不重排会话;recentWithDigest 倒序、排除当前、只取有摘要的", () => {
+    const wsDir = join(root, "ws-digest");
+    const s = new SessionStore(wsDir);
+    const a = s.create("旧");
+    const b = s.create("新"); // b 更晚,updatedAt 更大
+    const bUpdatedAt = s.list().find((x) => x.id === b.id)!.updatedAt;
+    s.setDigest(a.id, "意图:整理下载\n决策:删 .pco");
+    s.setDigest(b.id, "意图:发飞书");
+
+    // 不碰 updatedAt:写 digest 后 b 仍排在 a 前(顺序未因 digest 改变)
+    expect(s.list().find((x) => x.id === b.id)!.updatedAt).toBe(bUpdatedAt);
+
+    // 排除当前会话 b → 只剩 a;且带回 digest
+    const recent = s.recentWithDigest(4, b.id);
+    expect(recent.map((r) => r.id)).toEqual([a.id]);
+    expect(recent[0]!.digest).toContain("整理下载");
+
+    // 不排除时倒序(b 在前),且重启后 digest 保留
+    expect(new SessionStore(wsDir).recentWithDigest(4).map((r) => r.id)).toEqual([b.id, a.id]);
+  });
+
+  it("needingDigest:未处理/处理后又更新的会补跑;markDigested 后不再补;重启保留", () => {
+    const wsDir = join(root, "ws-catchup");
+    const s = new SessionStore(wsDir);
+    const a = s.create("A");
+    s.saveTranscript(a.id, [{ role: "user", content: "x" }]);
+
+    // 从未处理 → 待补跑
+    expect(s.needingDigest(8).map((r) => r.id)).toEqual([a.id]);
+
+    // 标记已处理 → 不再待补
+    s.markDigested(a.id);
+    expect(s.needingDigest(8)).toHaveLength(0);
+    expect(new SessionStore(wsDir).needingDigest(8)).toHaveLength(0); // 重启保留 digestedAt
+
+    // 处理后又有新活动(updatedAt 抬高)→ 重新待补
+    s.saveTranscript(a.id, [{ role: "user", content: "x2" }]);
+    expect(s.needingDigest(8).map((r) => r.id)).toEqual([a.id]);
+
+    // 排除当前会话
+    expect(s.needingDigest(8, a.id)).toHaveLength(0);
+  });
+
   it("归档:从 list 隐藏但保留,listArchived 可见且 transcript 不删", () => {
     const wsDir = join(root, "ws-4");
     const s = new SessionStore(wsDir);

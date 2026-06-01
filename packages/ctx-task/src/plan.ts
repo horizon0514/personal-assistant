@@ -62,11 +62,14 @@ export function createPlanTool(deps: PlanToolDeps): AgentTool<typeof planParams>
           content: [
             {
               type: "text",
-              text: `用户希望调整这次的开工计划,反馈如下:
+              text: `用户对这次开工对齐的反馈:
 
 ${result.text}
 
-请基于反馈重新调用 propose_plan 起草新版本,不要直接动手。`
+读懂反馈再决定下一步:
+- 若是在调整交付物/范围/验收标准 → 基于反馈重新调用 propose_plan 起草新版本。
+- 若用户其实是嫌对齐多余、要你别规划了直接做 → 别再 propose_plan,按反馈直接开干(破坏性操作仍逐次审批兜底)。
+别因为"必须先对齐"而把用户焊在反复规划里。`
             }
           ],
           details: { confirmed: false, feedback: result.text }
