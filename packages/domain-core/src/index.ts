@@ -27,7 +27,7 @@ export interface Intent {
 }
 
 /** Capability 域 —— 独立限界上下文(memory 为核心域,但工具调用沿用同一标签体系)*/
-export type Capability = "filesystem" | "webresearch" | "browser" | "memory" | "document";
+export type Capability = "filesystem" | "webresearch" | "browser" | "memory" | "document" | "shell";
 
 /** Action 风险分级(Trust & Governance 的核心值对象)*/
 export type RiskLevel =
