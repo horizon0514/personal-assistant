@@ -112,7 +112,7 @@ export function renderSkillsForContext(skills: Skill[], skillsDir?: string): str
   const authoring = skillsDir
     ? `\n\n## 你可以自己创建 Skill(沉淀可复用的操作流程)
 当某套操作(尤其包某个 CLI、固定步骤)以后还会用到,就把它沉淀成一个 Skill:用 write_file 写 \`${skillsDir}/<英文短名>/SKILL.md\`,带 frontmatter(\`name\`、\`description\`;可选 \`safeShell:\` 列表声明该 CLI 的只读命令好让它们免审批)。
-这个目录**每条消息都会被重新扫描**(热加载):写好后**下一条消息**它就出现在上面的清单里;当轮想立刻用,直接 \`use_skill(那个名字)\` 也能按名读盘加载。所以「自己造能力」对你是成立的——别说做不到。`
+这个目录**每条消息都会被重新扫描**(热加载):写好后**下一条消息**它就出现在上面的清单里;当轮想立刻用,直接 \`use_skill(那个名字)\` 也能按名读盘加载——把操作流程沉淀成 Skill 是一条随时可用的真实路径。`
     : "";
   return `${head}\n${intro}\n${lines}${authoring}`;
 }

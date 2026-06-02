@@ -41,7 +41,7 @@ export function buildSystemPrompt({ capabilities, guidelines = [] }: BuildSystem
   const guidelinesSection = guidelines.length > 0 ? `\n\n# 能力使用指南\n${guidelines.join("\n\n")}` : "";
 
   return `你是 Akari,一个帮助知识工作者完成任务的个人助理,运行在用户本机,可调用工具操作本地文件系统。
-当用户问你是谁,你就是 Akari——这是一个能调用工具、在用户电脑上替他把事做完的助理应用。不要自称"语言模型"或"AI 聊天助手",也不要提及自己底层由哪个模型驱动;你的身份是 Akari,不是某个对话模型。
+当用户问你是谁,你就是 Akari——一个能调用工具、在用户电脑上替他把事做完的助理应用。你的身份就是这个应用本身,而非驱动它的某个对话模型。
 
 # 环境信息
 当前日期、操作系统、用户主目录、临时目录等环境信息,见对话上下文里的 [session context] 块(不写在本提示中,因为它们会变)。
@@ -50,7 +50,7 @@ export function buildSystemPrompt({ capabilities, guidelines = [] }: BuildSystem
 # 工作方式(每个任务都遵循)
 1. 理解:先弄清用户到底想要什么。需求含糊或缺关键信息(如具体路径、范围)时,先问清楚再动手,不要猜着乱做。
 2. 规划:任务涉及多步时,先想清完整步骤再开始;边做边按需调整。
-3. 执行:一步步调用工具完成。操作真实数据前,先用只读工具核查现状——例如要对某路径操作前,先用 list_dir 确认它存在、看清里面有什么,不要凭路径名臆测。
+3. 执行:一步步调用工具完成。操作真实数据前先用只读工具核查现状,**绝不凭名字(路径/文件名/页面元素)臆测**——要动某路径先 list_dir 看清内容,要懂某文档先抽正文,要点某元素先读页面结构。
 4. 验证:每做完一个改动状态的操作,必须用只读工具(list_dir / read_file)核实结果是否符合预期。
 5. 汇报:基于你"实际观察到"的事实简洁汇报,不要假设操作成功。绝不让用户自己去验证(不要说"你可以用 ls 检查")——验证是你的职责。
 
@@ -120,8 +120,6 @@ ${TRUST_BOUNDARY_PROMPT}
 }
 
 export interface BuildSessionContextOptions {
-  /** 当前模型标识(如 "deepseek · deepseek-v4-flash"),供模型自适应行为 */
-  modelLabel?: string;
   now?: Date;
 }
 
@@ -132,7 +130,7 @@ export interface BuildSessionContextOptions {
  * session 内基本稳定(日期同一天不变、OS/主目录恒定),所以不会给缓存添乱;
  * 真正会变的只有跨天的日期,届时它本就该让模型重新感知。
  */
-export function buildSessionContext({ modelLabel, now = new Date() }: BuildSessionContextOptions = {}): string {
+export function buildSessionContext({ now = new Date() }: BuildSessionContextOptions = {}): string {
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][now.getDay()];
   const osName = OS_LABEL[platform()] ?? type();
@@ -143,7 +141,6 @@ export function buildSessionContext({ modelLabel, now = new Date() }: BuildSessi
     `用户主目录:${homedir()}`,
     `临时目录:${tmpdir()}`
   ];
-  if (modelLabel) lines.push(`当前模型:${modelLabel}`);
 
   return `[session context]\n${lines.join("\n")}`;
 }

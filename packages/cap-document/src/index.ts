@@ -82,7 +82,7 @@ export const documentToolRisk: Readonly<Record<string, RiskLevel>> = {
 };
 
 export const documentGuidelines = `## 文档提取
-- 需要理解某份文档(PDF/报告/合同等)的内容时,用 extract_document 抽成文本再读,不要凭文件名猜测。
+- 需要理解某份文档(PDF/报告/合同等)的内容时,用 extract_document 抽成文本再读。
 - 提取的是纯文本:扫描件/图片型 PDF 可能抽不出内容,这种情况如实说明,不要编造。
 - 大文档会被截断;若只关心局部,先 extract 看全貌,再按需结合其它工具定位。`;
 

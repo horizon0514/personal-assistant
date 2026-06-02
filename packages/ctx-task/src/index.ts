@@ -229,7 +229,16 @@ export class PiAgentAdapter {
         ? async (messages: AgentMessage[]): Promise<AgentMessage[]> => {
             const ctx = deps.contextProvider?.();
             if (!ctx) return messages;
-            const injected: AgentMessage = { role: "user", content: ctx, timestamp: Date.now() };
+            // 背景上下文受限于消息角色只能挂 user,但必须**显式声明它不是用户的请求**——
+            // 否则模型会把这坨背景(尤其「近期线索」)当成用户开口,转去推进旧任务、无视真正的提问
+            // (实测 bad case:用户问「你可以自我进化不」,模型却答「当前没有新的用户消息」跑去查定时任务)。
+            const framed =
+              "<上下文背景>\n下面是环境信息、关于用户的记忆、近期聊过的线索与可用技能,**这些都不是用户本轮的请求**," +
+              "只是供你参考的背景。用户这一轮真正要你做的,是本条之后的**最后一条 user 消息**;" +
+              "仅当背景与那条请求相关时才用它,不要主动去推进背景里提到的旧任务。\n\n" +
+              ctx +
+              "\n</上下文背景>";
+            const injected: AgentMessage = { role: "user", content: framed, timestamp: Date.now() };
             return [injected, ...messages];
           }
         : undefined,

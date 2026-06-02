@@ -68,7 +68,7 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
   name: "exec_shell",
   label: "执行 Shell 命令",
   description:
-    "在用户本机执行 shell 命令,返回 stdout/stderr/退出码。高风控:每次执行前需你审批确认。" +
+    "在用户本机执行 shell 命令,返回 stdout/stderr/退出码。纯只读命令自动执行;写/改状态或拿不准的命令会向用户弹审批,经其确认后才执行。" +
     "适合:查系统状态、git 操作、压缩解压、运行脚本等本地终端操作。不要用来启动交互式程序(如 vim、top)。",
   parameters: execShellParams,
   execute: async (_id, { command, cwd, timeout }, signal): Promise<AgentToolResult<any>> => {
@@ -262,8 +262,8 @@ export function classifyShellRisk(command: string, safePatterns: readonly string
 
 export const shellGuidelines = `## Shell 执行
 - exec_shell 用于需要命令行的场景:查系统状态、git 操作、压缩解压、运行脚本等。
-- 纯只读命令(如 ls / cat / pwd / git status / git diff)自动执行,无需打扰你;
-  任何写文件、改状态或拿不准的命令都会先弹审批,看清楚再点同意。
+- 纯只读命令(如 ls / cat / pwd / git status / git diff)自动执行,不打断用户;
+  任何写文件、改状态或拿不准的命令都会先向用户弹审批,经其看过同意后才执行。
 - 不要用它启动交互式程序(vim、top、htop、node 交互等),它们会挂住直到超时。
 - 命令默认在用户主目录执行,可通过 cwd 指定其他目录。
 - 超时默认 30 秒,最长 120 秒;长时间命令可手动调 timeout。
