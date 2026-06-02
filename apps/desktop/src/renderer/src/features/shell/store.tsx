@@ -61,6 +61,16 @@ export function ShellProvider({ children }: { children: ReactNode }): JSX.Elemen
   // 会话列表变化(自动命名 / 落盘)
   useEffect(() => window.pa.session.onChanged(setSessions), []);
 
+  // 点系统通知 → 主进程要求打开某条定时任务产出会话:刷新列表并切到它。
+  useEffect(
+    () =>
+      window.pa.schedule.onOpenSession(({ sessionId }) => {
+        void window.pa.session.list().then(setSessions);
+        setActiveSessionId(sessionId);
+      }),
+    []
+  );
+
   // sidebar 状态持久化
   useEffect(() => {
     localStorage.setItem("pa.sidebarCollapsed", sidebarCollapsed ? "1" : "0");

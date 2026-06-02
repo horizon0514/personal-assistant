@@ -2,13 +2,15 @@ import "./app-identity"; // 必须最先执行:设 app 名与 userData 目录(�
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import { execFileSync } from "node:child_process";
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, Notification } from "electron";
 import { registerIpc } from "./ipc";
 import { agent } from "./agent";
-import { setMainWindow } from "./main-window";
+import { getMainWindow, setMainWindow } from "./main-window";
 import { installAppMenu } from "./menu";
 import { appSettings, type ThemeSource } from "./app-settings";
 import { initAutoUpdate, checkForUpdatesManual } from "./updater";
+import { startScheduler, schedules } from "./scheduler";
+import type { ScheduleRecord } from "@pa/infra";
 
 const BG_LIGHT = "#f3f7f5";
 const BG_DARK = "#0e1411";
@@ -113,8 +115,40 @@ nativeTheme.on("updated", () => {
   }
 });
 
-// 领域 IPC(会话/审批/批量预览/可逆性)
+// 领域 IPC(会话/审批/批量预览/可逆性 + 定时任务)
 registerIpc();
+
+/**
+ * 定时任务到点:在新会话里跑一遍指令,弹原生系统通知;点通知 → 唤起主窗并打开该会话。
+ * runner 无论成败都 markRun(回写 lastRunAt),保证「当天同一任务只跑一次」的去重生效。
+ */
+function notifyScheduled(rec: ScheduleRecord, sessionId: string, summary: string): void {
+  if (!Notification.isSupported()) return;
+  const body = (summary || "已完成").replace(/\s+/g, " ").trim().slice(0, 200);
+  const n = new Notification({ title: rec.title || "定时任务", body });
+  n.on("click", () => {
+    const win = getMainWindow();
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    win.webContents.send("scheduler:openSession", { sessionId });
+  });
+  n.show();
+}
+
+startScheduler(async (rec) => {
+  let sessionId = "";
+  try {
+    const res = await agent.runScheduledTask(rec.title, rec.prompt);
+    sessionId = res.sessionId;
+    notifyScheduled(rec, sessionId, res.summary);
+  } catch (err) {
+    console.error(`[scheduler] 任务「${rec.title}」执行失败:`, err);
+  } finally {
+    schedules.markRun(rec.id, Date.now(), sessionId);
+  }
+});
 
 app.whenReady().then(() => {
   appSettings.apply(); // 应用持久化主题(影响后续窗口底色 + prefers-color-scheme)

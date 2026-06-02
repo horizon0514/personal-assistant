@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WorkspaceStore } from "./workspace-store";
 import { SessionStore } from "./session-store";
+import { ScheduleStore } from "./schedule-store";
 
 let root: string;
 beforeEach(() => {
@@ -125,6 +126,40 @@ describe("SessionStore", () => {
     expect(s2.listArchived()).toHaveLength(1);
     s2.setArchived(rec.id, false);
     expect(s2.list().some((x) => x.id === rec.id)).toBe(true);
+  });
+});
+
+describe("ScheduleStore", () => {
+  const draft = { title: "每日新闻", prompt: "搜 10 条新闻", time: "09:00", days: [], enabled: true };
+
+  it("create/update/remove 落盘,重启后读回;list 按时间排序", () => {
+    const a = new ScheduleStore(root);
+    const morning = a.create(draft);
+    a.create({ ...draft, title: "午间", time: "12:30" });
+
+    // 按 time 升序
+    expect(a.list().map((r) => r.time)).toEqual(["09:00", "12:30"]);
+
+    // 重启读回
+    const b = new ScheduleStore(root);
+    expect(b.get(morning.id)?.title).toBe("每日新闻");
+
+    // update 局部改
+    b.update(morning.id, { enabled: false, time: "08:00" });
+    expect(new ScheduleStore(root).get(morning.id)).toMatchObject({ enabled: false, time: "08:00" });
+
+    // remove
+    b.remove(morning.id);
+    expect(new ScheduleStore(root).get(morning.id)).toBeUndefined();
+  });
+
+  it("markRun 记录 lastRunAt + 会话 id", () => {
+    const s = new ScheduleStore(root);
+    const rec = s.create(draft);
+    s.markRun(rec.id, 1717200000000, "sess-1");
+    const after = new ScheduleStore(root).get(rec.id);
+    expect(after?.lastRunAt).toBe(1717200000000);
+    expect(after?.lastSessionId).toBe("sess-1");
   });
 });
 

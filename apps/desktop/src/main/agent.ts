@@ -295,7 +295,15 @@ function requestUserAnswer(question: string, options: string[]): Promise<string>
 // ── 每 session 一个 adapter(用 transcript 播种)─────────────
 const adapters = new Map<string, PiAgentAdapter>();
 
-function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMessage[]): PiAgentAdapter {
+function buildAdapter(
+  wsId: string,
+  sessionId: string,
+  initialMessages?: AgentMessage[],
+  opts: { background?: boolean } = {}
+): PiAgentAdapter {
+  // background:定时任务的无人值守运行。不把流式增量/领域事件/可查看结果推给渲染层
+  //（否则后台任务的 token 会串进用户当前打开的会话视图);transcript 仍照常落盘。
+  const background = opts.background ?? false;
   const memory = getMemory(wsId);
   const model = createModel({ provider: PROVIDER, modelId: MODEL, forceVision: FORCE_VISION });
   const modelHasVision = model.input.includes("image");
@@ -431,10 +439,14 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
       requestApproval
     }),
     capabilityOf,
-    onAssistantDelta: (text) => sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent),
+    onAssistantDelta: (text) => {
+      if (!background) sendTo("chat:stream", { type: "delta", text } satisfies ChatStreamEvent);
+    },
     // 增量落盘:每个 assistant turn 收尾即持久化快照,运行中(含卡在审批/规划)也不丢对话。
     onTurnEnd: (transcript) => getSessions(wsId).saveTranscript(sessionId, transcript),
-    onEvent: (event: DomainEvent) => sendTo("domain:event", event),
+    onEvent: (event: DomainEvent) => {
+      if (!background) sendTo("domain:event", event);
+    },
     afterTool: ({ actionId, capability, tool, details, resultText, isError }) => {
       if (isError) return;
       // 渐进披露:记下本轮真正用了哪些 capability,下条用户消息进来时把它们继续保留(continuation 兜底)
@@ -448,15 +460,16 @@ function buildAdapter(wsId: string, sessionId: string, initialMessages?: AgentMe
       const inj = details as { injectionSuspected?: boolean; injectionReasons?: string[]; url?: string } | undefined;
       if (inj?.injectionSuspected) {
         console.warn(`[security] 疑似 prompt injection @ ${inj.url ?? tool}:`, inj.injectionReasons?.join("、"));
-        sendTo("domain:event", {
-          type: "InjectionSuspected",
-          actionId,
-          source: inj.url ?? tool,
-          reasons: inj.injectionReasons ?? []
-        } satisfies DomainEvent);
+        if (!background)
+          sendTo("domain:event", {
+            type: "InjectionSuspected",
+            actionId,
+            source: inj.url ?? tool,
+            reasons: inj.injectionReasons ?? []
+          } satisfies DomainEvent);
       }
       // 可查看工具:把结果文本推给渲染层,供 step 行"查看"按钮重开到 artifact 面板
-      if (VIEWABLE_TOOLS.has(tool) && resultText.trim()) {
+      if (!background && VIEWABLE_TOOLS.has(tool) && resultText.trim()) {
         sendTo("step:result", { actionId, body: resultText });
       }
       const reversal = (details as { reversal?: { kind: string } & Record<string, unknown> } | undefined)?.reversal;
@@ -614,6 +627,48 @@ export const agent = {
     adapters.get(sessionId)?.abort();
   },
 
+  /**
+   * 定时任务触发:把 prompt 当作一条用户消息,在当前 workspace 新开一个会话里无人值守地跑一遍,
+   * 产出落盘成会话。返回会话 id + 末条助理回复(供系统通知摘要)。
+   *
+   * 用后台 adapter(不串流到渲染层),且不缓存进 adapters——用户日后打开该会话时,
+   * 会从落盘 transcript 重建一个正常的交互 adapter。
+   * 注意:适合只读/调研类(如取新闻);若任务触发了需审批的写操作,审批卡会发往当前活动窗口。
+   */
+  async runScheduledTask(
+    title: string,
+    prompt: string
+  ): Promise<{ wsId: string; sessionId: string; summary: string }> {
+    const wsId = activeWorkspaceId;
+    const sessions = getSessions(wsId);
+    const rec = sessions.create((title || "定时任务").trim().slice(0, 24) || "定时任务");
+    const sessionId = rec.id;
+    broadcast("session:changed", sessions.list());
+    const instance = buildAdapter(wsId, sessionId, undefined, { background: true });
+    try {
+      const selector = selectorsBySession.get(sessionId);
+      if (selector) instance.setTools(selector(prompt, new Set<Capability>()));
+      await instance.startTask({ text: prompt, conversationId: newConversationId() });
+      const transcript = instance.snapshotTranscript();
+      sessions.saveTranscript(sessionId, transcript);
+      broadcast("session:changed", sessions.list());
+      const err = instance.lastError();
+      return { wsId, sessionId, summary: err ? `运行出错:${err}` : lastAssistantText(transcript) };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      try {
+        sessions.saveTranscript(sessionId, instance.snapshotTranscript());
+      } catch {
+        /* 落盘失败不致命 */
+      }
+      return { wsId, sessionId, summary: `运行出错:${message}` };
+    } finally {
+      // 一次性后台运行:清掉它在选择器/最近能力累加器里的痕迹,别让它影响别的会话。
+      selectorsBySession.delete(sessionId);
+      recentBySession.delete(sessionId);
+    }
+  },
+
   resolveApproval(actionId: string, approved: boolean): void {
     const resolve = pendingApprovals.get(actionId);
     if (resolve) {
@@ -738,6 +793,19 @@ function textFromContent(content: unknown): string {
     .filter((b): b is { type: "text"; text: string } => (b as { type?: string })?.type === "text")
     .map((b) => b.text)
     .join("");
+}
+
+/** 取 transcript 里最后一条非空助理文本(定时任务通知摘要用)。 */
+function lastAssistantText(transcript: unknown): string {
+  if (!Array.isArray(transcript)) return "";
+  for (let i = transcript.length - 1; i >= 0; i--) {
+    const m = transcript[i] as { role?: string; content?: unknown };
+    if (m?.role === "assistant") {
+      const t = textFromContent(m.content).trim();
+      if (t) return t;
+    }
+  }
+  return "";
 }
 
 /** 把 transcript 压成「以用户为中心」的文本喂给摘要器:用户原话全留,助理只留短文本做消歧,工具噪声丢弃。 */

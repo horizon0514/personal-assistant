@@ -87,3 +87,4 @@ export async function generateText(model: ModelHandle, opts: GenerateTextOptions
 export { readJson, writeJson } from "./persistence";
 export { WorkspaceStore, type WorkspaceRecord } from "./workspace-store";
 export { SessionStore, type SessionRecord } from "./session-store";
+export { ScheduleStore, type ScheduleRecord, type ScheduleDraft } from "./schedule-store";
