@@ -104,7 +104,7 @@
 
 > 已落地:第1层 滚动会话摘要(意图+决策,离开蒸馏,注入「近期线索」带相对时间戳)、第3层 search_history(历史 transcript 关键词检索)、第2层 主动记忆形成(扩 remember + 会话收尾保守沉淀)、客户端重启补跑(digestedAt/needingDigest 懒触发)、skill 热加载认知纠正(告诉模型可自建 skill)。
 
-- [ ] **撤掉/瘦身 `[browser-activity]` 诊断日志**:`browser-manager.ts` 里 `ensureWebview` 的调用栈打印 + 各工具入口的 `[browser-activity]` 行,是排查"发飞书却弹浏览器"时加的临时观测。根因已修(`read_current_page` 没页面不再拉空面板)。决定:全撤,或留轻量版(去掉栈打印、只留一行)。
+- [x] **撤掉 `[browser-activity]` 诊断日志**(2026-06-02):已全撤(`logAct`/`callerStack` 及各工具入口调用),保留 `read_current_page` 没页面不拉空面板的功能修复。
 - [ ] **同步 memory `cross-conversation-memory`**:把本轮进展补进那条记忆——第1/3/2 层均已落地、客户端重启懒触发补跑已实现、skill 热加载认知已纠正;capstone 第4层 dream 仍待攒料。
 
 > 第4层 dream(离线消化/反思,自我进化引擎)的设计已记在 memory `cross-conversation-memory`,攒够真实会话/反馈后再启动,此处不重列。
