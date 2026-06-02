@@ -4,9 +4,9 @@ import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
 export type { MemoryView };
 import type { FileChangeOp } from "@pa/cap-filesystem";
-import type { WorkspaceRecord, SessionRecord } from "@pa/infra";
+import type { WorkspaceRecord, SessionRecord, ScheduleRecord, ScheduleDraft } from "@pa/infra";
 
-export type { WorkspaceRecord, SessionRecord };
+export type { WorkspaceRecord, SessionRecord, ScheduleRecord, ScheduleDraft };
 
 export interface BatchRequest {
   actionId: string;
@@ -216,6 +216,21 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: JournalView[]): void => cb(payload);
       ipcRenderer.on("reversibility:changed", listener);
       return () => ipcRenderer.removeListener("reversibility:changed", listener);
+    }
+  },
+  schedule: {
+    list: (): Promise<ScheduleRecord[]> => ipcRenderer.invoke("schedule:list"),
+    create: (draft: ScheduleDraft): Promise<ScheduleRecord[]> => ipcRenderer.invoke("schedule:create", draft),
+    update: (id: string, patch: Partial<ScheduleDraft>): Promise<ScheduleRecord[]> =>
+      ipcRenderer.invoke("schedule:update", { id, patch }),
+    remove: (id: string): Promise<ScheduleRecord[]> => ipcRenderer.invoke("schedule:remove", id),
+    /** 立即运行一次(测试 / 手动触发),返回最新列表 */
+    runNow: (id: string): Promise<ScheduleRecord[]> => ipcRenderer.invoke("schedule:runNow", id),
+    /** 点系统通知后,主进程要求打开某条产出会话 */
+    onOpenSession: (cb: (p: { sessionId: string }) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: { sessionId: string }): void => cb(payload);
+      ipcRenderer.on("scheduler:openSession", listener);
+      return () => ipcRenderer.removeListener("scheduler:openSession", listener);
     }
   },
   memory: {

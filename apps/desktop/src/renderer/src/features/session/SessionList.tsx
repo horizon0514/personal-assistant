@@ -1,14 +1,16 @@
-import { useEffect, useRef } from "react";
-import { Archive, SquarePen } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Archive, SquarePen, CalendarClock } from "lucide-react";
 import { useShell } from "../shell/store";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ArchivedSessions } from "./ArchivedSessions";
+import { ScheduleManager } from "../schedule/ScheduleManager";
 
 /** 最左栏:当前 workspace 的会话列表 + 左下角 workspace 切换/设置。可折叠、可调宽。 */
 export function SessionList(): JSX.Element {
   const { sessions, activeSessionId, setActiveSession, newSession, archiveSession, sidebarWidth, setSidebarWidth } =
     useShell();
   const dragging = useRef(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   useEffect(() => {
     const onMove = (e: MouseEvent): void => {
@@ -39,7 +41,7 @@ export function SessionList(): JSX.Element {
         </span>
       </div>
 
-      <div className="no-drag px-3 pb-2">
+      <div className="no-drag space-y-1.5 px-3 pb-2">
         <button
           className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-stone-300 py-2 text-[12.5px] font-medium text-stone-700 transition hover:border-ember-300 hover:text-ember-600 dark:border-white/10 dark:text-stone-400 dark:hover:border-ember-500/50"
           onClick={newSession}
@@ -47,7 +49,17 @@ export function SessionList(): JSX.Element {
           <SquarePen size={15} strokeWidth={2} />
           新会话
         </button>
+        <button
+          className="flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-[12px] text-stone-500 transition hover:bg-stone-100 hover:text-ember-600 dark:text-stone-400 dark:hover:bg-ink-800"
+          onClick={() => setScheduleOpen(true)}
+          title="管理定时任务(如每天早上发新闻)"
+        >
+          <CalendarClock size={14} strokeWidth={2} />
+          定时任务
+        </button>
       </div>
+
+      {scheduleOpen && <ScheduleManager onClose={() => setScheduleOpen(false)} />}
 
       <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2">
         {sessions.length === 0 ? (

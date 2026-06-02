@@ -3,7 +3,9 @@
  * 分组:workspace / session / chat / approval / batch / reversibility / memory。
  */
 import { type IpcMainEvent, ipcMain } from "electron";
+import type { ScheduleDraft } from "@pa/infra";
 import { agent } from "./agent";
+import { schedules } from "./scheduler";
 
 export function registerIpc(): void {
   // Workspace
@@ -78,6 +80,15 @@ export function registerIpc(): void {
   // Reversibility:journal / 撤销
   ipcMain.handle("reversibility:list", () => agent.listJournal());
   ipcMain.handle("reversibility:undoLast", () => agent.undoLast());
+
+  // Scheduled Tasks:定时任务 CRUD + 立即运行(均返回最新列表)
+  ipcMain.handle("schedule:list", () => schedules.list());
+  ipcMain.handle("schedule:create", (_e, draft: ScheduleDraft) => schedules.create(draft));
+  ipcMain.handle("schedule:update", (_e, p: { id: string; patch: Partial<ScheduleDraft> }) =>
+    schedules.update(p.id, p.patch)
+  );
+  ipcMain.handle("schedule:remove", (_e, id: string) => schedules.remove(id));
+  ipcMain.handle("schedule:runNow", (_e, id: string) => schedules.runNow(id));
 
   // Personal Memory:列出 / 软删(遗忘)/ 恢复(按 wsId)
   ipcMain.handle("memory:list", (_e, wsId: string) => agent.listMemory(wsId));
