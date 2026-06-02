@@ -467,7 +467,7 @@ export const filesystemGuidelines = `## 文件操作
 ## 搜索(找东西时这样做)
 - 把语义意图拆成多个字面查询:同义词、中英文、文件名/扩展名、可能目录。例如"报税相关"→ 试 发票、报销、tax、invoice、*.pdf。
 - 一次性并行发起多个 find_files / grep_files(放在同一轮),快速铺开,而不是一个一个试。
-- 拿到结果后迭代:命中就深入(read_file / 再 grep);没命中就换关键词、换目录、放宽模式重试——绝不搜一次就放弃或下结论。
-- 组合使用:list_dir 摸清结构 → find_files 定位候选 → grep_files 看内容。搜索是只读、零代价的,宁可多搜几次也别凭猜测回答。`;
+- 拿到结果后迭代:命中就深入(read_file / 再 grep);没命中就换关键词、换目录、放宽模式重试。
+- 组合使用:list_dir 摸清结构 → find_files 定位候选 → grep_files 看内容。搜索是只读、零代价的,宁可多搜几次。`;
 
 export { CAPABILITY as filesystemCapability };

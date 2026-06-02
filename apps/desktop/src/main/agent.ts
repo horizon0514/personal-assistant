@@ -129,14 +129,13 @@ interface CapabilityGroup {
   alwaysOn: boolean;
   /** 用户消息文本里命中即启用本轮(可选,通常给非 alwaysOn 的能力配) */
   matches?: (userText: string) => boolean;
+  /**
+   * 该能力的使用指南。**gated 能力**(browser/shell/schedule)把 guideline 挂这里——本轮被选中才随工具一起
+   * 经 contextProvider 注入,与 selectTools 同一道门,避免给无关任务背编排说明。
+   * **always-on 能力**(fs/doc/memory)不挂这里,其 guideline 留在字节冻结的 system prompt(反正每轮都在,零缓存损失)。
+   */
+  guideline?: string;
 }
-
-/**
- * 启用 browser 工具组的关键词。命中即把整组浏览器工具暴露给本轮。
- * 宁多勿少:漏一个常见词导致本轮拿不到 browser 比多挂一组更糟。
- */
-const BROWSER_KEYWORDS =
-  /网页|网址|网站|链接|搜索|搜一下|搜个|查一下|查询|调研|google|baidu|百度|bing|url|https?:\/\/|打开.{0,4}页|浏览器|页面|在线|登录/i;
 
 /**
  * 启用 shell 工具组的关键词。命中即把 exec_shell 暴露给本轮。
@@ -183,8 +182,15 @@ const CAPABILITY_DESCRIPTIONS = [
 
 // 每会话「上一轮真正用过的 capability」累积器(渐进披露的 continuation 兜底,见 send / afterTool)。
 const recentBySession = new Map<string, Set<Capability>>();
+/** 本轮选择结果:暴露的工具子集 + 选中 gated 能力的 guideline 串(随 selectTools 同一道门算出)。 */
+interface TurnSelection {
+  tools: AgentTool[];
+  guideline: string;
+}
 // 每会话工具选择器(buildAdapter 时绑定 sessionId 闭包,send 里读取)。
-const selectorsBySession = new Map<string, (userText: string, recent: Set<Capability>) => AgentTool[]>();
+const selectorsBySession = new Map<string, (userText: string, recent: Set<Capability>) => TurnSelection>();
+// 每会话「本轮 gated guideline 串」(send 里随 selectTools 写入,contextProvider 按轮注入)。
+const turnGuidelineBySession = new Map<string, string>();
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -349,9 +355,10 @@ function buildAdapter(
       tools: createMemoryTools(memory, () => broadcastMemory(wsId), () => sessionId)
     },
     {
+      // 网页调研是核心能力,且关键词门控对续接指令(「再手动跑一次」)太脆 —— 漏挂 browser 会让模型
+      // 误以为有 web 工具、找不到就退化成 curl 抓网页(SPA 抓空壳 + curl 走审批)。故 alwaysOn,其 guideline 进冻结 prompt。
       capability: "browser",
-      alwaysOn: false,
-      matches: (text) => BROWSER_KEYWORDS.test(text),
+      alwaysOn: true,
       tools: activeBrowserTools
     },
     {
@@ -361,13 +368,15 @@ function buildAdapter(
       // Skill 跑在 exec_shell 上,装了 Skill 的任务(如「发飞书消息」)多半不含 shell 关键词,
       // 不一并暴露会让模型读了手册却发现无工具可执行。每次重扫=随 Skill 热加载。
       matches: (text) => SHELL_KEYWORDS.test(text) || scanSkills(SKILLS_DIR).length > 0,
-      tools: [...shellTools]
+      tools: [...shellTools],
+      guideline: shellGuidelines
     },
     {
       capability: "schedule",
       alwaysOn: false,
       matches: (text) => SCHEDULE_KEYWORDS.test(text), // 设新任务/管理已有,后续轮靠 recent 兜底
-      tools: scheduleTools
+      tools: scheduleTools,
+      guideline: scheduleGuidelines
     }
   ];
   // 不属于具体 capability、但总是要暴露的工具(propose_plan 是任务编排级,跟具体能力域无关)。
@@ -394,14 +403,16 @@ function buildAdapter(
    * recent 是 continuation 兜底——比如上一轮用了 browser,本轮用户只回"好了",关键词不会命中,
    * 但 recent 里还有 browser,这一轮仍把 browser 工具组挂上,模型才能接着干。
    */
-  const selectTools = (userText: string, recent: Set<Capability>): AgentTool[] => {
-    const out: AgentTool[] = [...alwaysOnExtras];
+  const selectTools = (userText: string, recent: Set<Capability>): TurnSelection => {
+    const tools: AgentTool[] = [...alwaysOnExtras];
+    const guidelines: string[] = [];
     for (const g of catalog) {
       if (g.alwaysOn || recent.has(g.capability) || (g.matches?.(userText) ?? false)) {
-        out.push(...g.tools);
+        tools.push(...g.tools);
+        if (g.guideline) guidelines.push(g.guideline); // gated 能力本轮被选中 → 其 guideline 随之注入
       }
     }
-    return out;
+    return { tools, guideline: guidelines.join("\n\n") };
   };
   selectorsBySession.set(sessionId, selectTools);
 
@@ -422,14 +433,9 @@ function buildAdapter(
     writeTrace: (text) => getSessions(wsId).writeTrace(sessionId, text),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
-      guidelines: [
-        filesystemGuidelines,
-        documentGuidelines,
-        browserGuidelines,
-        memoryGuidelines,
-        shellGuidelines,
-        scheduleGuidelines
-      ]
+      // 只放 always-on 能力的 guideline(每轮都在,留冻结=零缓存损失)。browser 现为 always-on,故其指南也在此。
+      // 仍 gated 的能力(shell/schedule)的 guideline 挂在 catalog 上,随 selectTools 经 contextProvider 按轮注入。
+      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines, browserGuidelines]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
@@ -444,6 +450,8 @@ function buildAdapter(
       // 「近期线索」(滚动会话摘要)同样在此注入,给跨对话连续性;会话内稳定,不破缓存。
       [
         buildSessionContext(),
+        // 本轮选中的 gated 能力(browser/shell/schedule)guideline——随 selectTools 同门注入,无关任务不背。
+        turnGuidelineBySession.get(sessionId),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -559,6 +567,7 @@ export const agent = {
     adapters.clear(); // 简单起见全清,下次按需从磁盘 transcript 重建
     selectorsBySession.clear();
     recentBySession.clear();
+    turnGuidelineBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -633,7 +642,10 @@ export const agent = {
       if (selector) {
         const prevRecent = recentBySession.get(sessionId) ?? new Set<Capability>();
         recentBySession.set(sessionId, new Set()); // 重置:本轮的累加从空开始
-        instance.setTools(selector(text, prevRecent));
+        const selection = selector(text, prevRecent);
+        instance.setTools(selection.tools);
+        // 本轮 gated guideline 存入槽,contextProvider(startTask 内被调)按轮读取注入,时序与 setTools 一致。
+        turnGuidelineBySession.set(sessionId, selection.guideline);
       }
       await instance.startTask({ text, conversationId: newConversationId() });
       // 被后来的 send 顶替(用户在验收期发了新消息)→ 本轮已被打断,流由新 run 接管,
@@ -684,7 +696,11 @@ export const agent = {
     const instance = buildAdapter(wsId, sessionId, undefined, { background: true });
     try {
       const selector = selectorsBySession.get(sessionId);
-      if (selector) instance.setTools(selector(prompt, new Set<Capability>()));
+      if (selector) {
+        const selection = selector(prompt, new Set<Capability>());
+        instance.setTools(selection.tools);
+        turnGuidelineBySession.set(sessionId, selection.guideline); // 定时任务也按选中能力注入 gated guideline
+      }
       await instance.startTask({ text: prompt, conversationId: newConversationId() });
       const transcript = instance.snapshotTranscript();
       sessions.saveTranscript(sessionId, transcript);
@@ -703,6 +719,7 @@ export const agent = {
       // 一次性后台运行:清掉它在选择器/最近能力累加器里的痕迹,别让它影响别的会话。
       selectorsBySession.delete(sessionId);
       recentBySession.delete(sessionId);
+      turnGuidelineBySession.delete(sessionId);
     }
   },
 
@@ -982,5 +999,5 @@ function renderRecentThreads(sessions: SessionStore, currentId: string): string 
   const lines = recent.map(
     (r) => `- [${relativeDayLabel(r.updatedAt, now)}] ${(r.digest ?? "").replace(/\s*\n\s*/g, " · ")}`
   );
-  return `# 近期线索(你和这位用户最近聊过的,可据此主动接上话头;细节可让用户提示或另查)\n${lines.join("\n")}`;
+  return `# 近期线索(你和这位用户最近聊过的话题,仅供本轮请求相关时回忆参考;**不要主动推进这里提到的旧任务**,除非用户这轮明确提起)\n${lines.join("\n")}`;
 }

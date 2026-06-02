@@ -156,7 +156,7 @@ export function createBrowserTools(controller: BrowserController): AgentTool<any
     name: "browser_open",
     label: "打开网页",
     description:
-      "在**可见**的内置浏览器里打开一个网页(跳转可见面板,用户能看到并操作),并返回页面正文。用于:web_fetch 返回了登录/验证页 → 用它把该页摆到用户面前,让用户登录一次(登录态本地持久留存、与 web_fetch 共享同一会话),登录后再 web_fetch 即可读到;或用户想亲自看/操作某页。纯读取正文用 web_fetch(后台、可并发),不要用这个。",
+      "在**可见**的内置浏览器里打开网页(跳转可见面板,用户能看到并操作)并返回正文。用于把某页摆到用户面前——web_fetch 撞上登录/验证页、或用户想亲自看/操作某页时。纯后台读正文用 web_fetch。",
     parameters: openParams,
     execute: async (_id, { url }, signal) => pageResult(await controller.open(url, signal))
   };
@@ -165,7 +165,7 @@ export function createBrowserTools(controller: BrowserController): AgentTool<any
     name: "read_current_page",
     label: "读取当前页面",
     description:
-      "读取内置浏览器**当前正显示**的页面(标题/URL/正文),不导航、不跳转。用户问「我在看什么/当前页面是啥」,或用户自己手动翻到了某页时,用这个读现状——不要用 web_fetch(它会跳转、冲掉当前页),也不要凭上下文里的旧内容臆测。",
+      "读取内置浏览器**当前正显示**的页面(标题/URL/正文),不导航、不跳转。用户问「我在看什么/当前页面是啥」、或自己手动翻到某页时,用它读现状。",
     parameters: readCurrentParams,
     execute: async (_id, _args, signal) => pageResult(await controller.current(signal))
   };
