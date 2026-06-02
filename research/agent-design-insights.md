@@ -63,6 +63,8 @@
 
 ## 6. ACI 小账:工具能力缺口靠「错误引导」,不只是兜底 shell
 
+> **状态:已落地(2026-05-28,filesystem 部分)。** 起点是发现执行器对"工具返回空结果"几乎不反思——它把 0 命中当真相继续干。`packages/cap-filesystem/src/index.ts` 给 list_dir/read_file 加 ENOENT/ENOTDIR/EISDIR 分支,抛错时附**父目录近邻**(按 basename token 做大小写不敏感子串匹配,最多 12 条);find_files/grep_files 零命中不再返回干瘪的"(未找到)",而是返回 stem 近邻 + 目录里实际有的扩展名 + 显式"下一步"建议(放宽 glob、换上级目录、改用另一工具),并都带一句"别用同一参数再搜一次"反复推。配合 system prompt 在「坚持完成」段加一条「**工具返回空结果≠真相,换一个再试**」(`apps/desktop/src/main/system-prompt.ts`),把反思变成纪律,而不是靠模型自发。回归测试 `packages/cap-filesystem/src/hints.test.ts`(12 用例)。其他能力域(browser/document/web)待同样改造。
+
 `building-effective-agents` 的 ACI 原则:工具不只 schema 稳,**报错要能告诉模型"该改用什么"**(poka-yoke)。`TODO.md`「工具能力兜底」里受限 shell 是一条路,但更便宜的一招:**让现有工具失败时返回引导性错误**(如 write_file 到不存在目录,返回"父目录不存在,可用 X")。兜圈往往不是缺能力,是错误信息没给出口。
 
 ---

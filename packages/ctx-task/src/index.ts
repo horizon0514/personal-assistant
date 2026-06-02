@@ -282,8 +282,9 @@ export class PiAgentAdapter {
     this.deps.onEvent({ type: "TaskCreated", taskId, intent });
     const translator = new DomainTranslator(taskId, this.deps.capabilityOf);
 
-    // 验收所需的过程信息:是否调过工具、客观执行轨迹(累计,带命令+结果片段)。
-    // start 事件带 args、end 事件带 result;按 toolCallId 把两者对上,供验收器看清"做了什么/返回了什么"。
+    // 验收所需的过程信息:本轮是否调过工具、本轮客观执行轨迹(带命令+完整结果,供验收器看清"做了什么/返回了什么")。
+    // start 事件带 args、end 事件带 result,按 toolCallId 对上。**逐 round 重置**(见 loop 顶部)——
+    // 否则返工 round 里执行器只回文字也会触发 evaluator,且 evaluator 会拿到上一轮的动作日志而误判。
     let sawTool = false;
     const actionLog: ActionTraceEntry[] = [];
     const pendingArgs = new Map<string, string>();
@@ -342,6 +343,11 @@ export class PiAgentAdapter {
     try {
       let prompt = intent.text;
       for (let round = 0; ; round++) {
+        // 本轮累加器清零:evaluator 看到的"调过什么"必须是"本轮调过的"。
+        // subscribe 是 startTask 全程注册一次,这些 let/array 通过闭包共享——重置完再 await 就行。
+        sawTool = false;
+        actionLog.length = 0;
+        pendingArgs.clear();
         pendingFinalText = "";
         await this.agent.prompt(prompt);
 
