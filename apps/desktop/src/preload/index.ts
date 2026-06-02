@@ -231,6 +231,12 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: { sessionId: string }): void => cb(payload);
       ipcRenderer.on("scheduler:openSession", listener);
       return () => ipcRenderer.removeListener("scheduler:openSession", listener);
+    },
+    /** 定时任务被(模型/其他窗口)改动 → 推最新列表,面板实时刷新 */
+    onChanged: (cb: (list: ScheduleRecord[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, list: ScheduleRecord[]): void => cb(list);
+      ipcRenderer.on("schedule:changed", listener);
+      return () => ipcRenderer.removeListener("schedule:changed", listener);
     }
   },
   memory: {

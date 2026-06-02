@@ -34,6 +34,8 @@ export function ScheduleManager({ onClose }: { onClose: () => void }): JSX.Eleme
 
   useEffect(() => {
     void window.pa.schedule.list().then(setList);
+    // 模型在聊天里建/改/删定时任务时,主进程广播最新列表 → 面板实时同步
+    return window.pa.schedule.onChanged(setList);
   }, []);
 
   const startCreate = (preset: ScheduleDraft): void => {

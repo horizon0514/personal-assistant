@@ -45,6 +45,8 @@ import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, t
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
 import { BrowserManager } from "./browser-manager";
 import { createSearchHistoryTool, searchHistoryToolName } from "./history-search";
+import { createScheduleTools, scheduleToolNames, scheduleGuidelines } from "./schedule-tools";
+import { schedules } from "./scheduler";
 import {
   newConversationId,
   type Capability,
@@ -92,6 +94,7 @@ for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 for (const t of shellToolNames) capabilityByTool.set(t, "shell");
 capabilityByTool.set(searchHistoryToolName, "memory"); // 跨对话回忆,归入记忆能力
+for (const t of scheduleToolNames) capabilityByTool.set(t, "schedule");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
 
 // 评估器可用的只读工具(独立核查产出用;不含记忆写入/破坏性工具)。
@@ -143,6 +146,13 @@ const SHELL_KEYWORDS =
   /shell|终端|命令行|命令|执行|运行|跑一下|git |npm |pnpm |yarn |node |python |bash |zsh |chmod|chown|mkdir|rm |cp |mv |ls |cat |grep |find |du |df |ps |kill|brew |curl |wget |tar |zip |unzip|docker |kubectl|ssh |scp/i;
 
 /**
+ * 启用 schedule(定时任务)工具组的关键词:涵盖"设新任务"与"管理已有"两类自然语言。
+ * 后续轮靠 recent 兜底(上一轮用过 schedule,接着"改到8点/删掉它"仍带着工具)。
+ */
+const SCHEDULE_KEYWORDS =
+  /定时|定期|每天|每日|每周|每月|每隔|工作日|周[一二三四五六日天]|提醒我|到点|按时|准时|闹钟|routine|schedule|cron|\d+\s*点|早上|上午|中午|下午|傍晚|晚上|凌晨|几点/i;
+
+/**
  * 注入 system prompt 的能力分区描述。**字节冻结**:同一份描述跨 session/天/adapter 重建必须逐字节相同。
  * 不逐工具枚举——实际工具集每轮由 API tools 参数承载。
  */
@@ -164,6 +174,10 @@ const CAPABILITY_DESCRIPTIONS = [
   {
     name: "shell",
     summary: "在用户本机执行 shell 命令并返回输出。纯只读命令自动跑,写/改状态的命令需审批。详见下方「Shell 执行」指南。"
+  },
+  {
+    name: "schedule",
+    summary: "定时任务:用自然语言设定「到点(每天/指定星期某时刻)自动跑一条指令并通知」,以及查看/修改/暂停/取消已有定时。别让用户去面板填表单。详见下方「定时任务」指南。"
   }
 ];
 
@@ -249,6 +263,15 @@ function broadcast(channel: string, payload: unknown): void {
 function broadcastMemory(wsId: string): void {
   broadcast("memory:changed", { wsId, items: getMemory(wsId).list() });
 }
+/** 定时任务 NL 工具:模型从一句话建/查/改/删,变更后广播 schedule:changed 让面板实时刷新。 */
+const scheduleTools = createScheduleTools({
+  list: () => schedules.list(),
+  create: (draft) => schedules.create(draft),
+  update: (id, patch) => schedules.update(id, patch),
+  remove: (id) => schedules.remove(id),
+  onChange: () => broadcast("schedule:changed", schedules.list())
+});
+
 function broadcastJournal(): void {
   broadcast("reversibility:changed", journal.list());
 }
@@ -339,6 +362,12 @@ function buildAdapter(
       // 不一并暴露会让模型读了手册却发现无工具可执行。每次重扫=随 Skill 热加载。
       matches: (text) => SHELL_KEYWORDS.test(text) || scanSkills(SKILLS_DIR).length > 0,
       tools: [...shellTools]
+    },
+    {
+      capability: "schedule",
+      alwaysOn: false,
+      matches: (text) => SCHEDULE_KEYWORDS.test(text), // 设新任务/管理已有,后续轮靠 recent 兜底
+      tools: scheduleTools
     }
   ];
   // 不属于具体 capability、但总是要暴露的工具(propose_plan 是任务编排级,跟具体能力域无关)。
@@ -393,7 +422,14 @@ function buildAdapter(
     writeTrace: (text) => getSessions(wsId).writeTrace(sessionId, text),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
-      guidelines: [filesystemGuidelines, documentGuidelines, browserGuidelines, memoryGuidelines, shellGuidelines]
+      guidelines: [
+        filesystemGuidelines,
+        documentGuidelines,
+        browserGuidelines,
+        memoryGuidelines,
+        shellGuidelines,
+        scheduleGuidelines
+      ]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
@@ -423,6 +459,7 @@ function buildAdapter(
           call.tool === "ask_user" ||
           call.tool === "use_skill" ||
           call.tool === searchHistoryToolName || // 跨对话回忆,只读
+          scheduleToolNames.has(call.tool) || // 定时任务增删改:可见(面板+聊天回报)、可逆,自动跑不弹审批
           memoryToolNames.has(call.tool)
         )
           return "ReadOnly";
