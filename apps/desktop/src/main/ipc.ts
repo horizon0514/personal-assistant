@@ -43,8 +43,8 @@ export function registerIpc(): void {
 
   // Conversation
   ipcMain.handle("chat:model", () => agent.modelLabel());
-  ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string }) =>
-    void agent.send(e.sender, p.sessionId, p.text)
+  ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[] }) =>
+    void agent.send(e.sender, p.sessionId, p.text, p.attachments)
   );
   ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 

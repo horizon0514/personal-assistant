@@ -8,7 +8,7 @@
  */
 import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   PiAgentAdapter,
@@ -202,6 +202,19 @@ interface TurnSelection {
 const selectorsBySession = new Map<string, (userText: string, recent: Set<Capability>) => TurnSelection>();
 // 每会话「本轮 gated guideline 串」(send 里随 selectTools 写入,contextProvider 按轮注入)。
 const turnGuidelineBySession = new Map<string, string>();
+// 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
+// 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
+const turnAttachmentsBySession = new Map<string, string[]>();
+
+/** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
+function renderTurnAttachments(paths: string[] | undefined): string | undefined {
+  if (!paths || paths.length === 0) return undefined;
+  return [
+    "## 本轮附件(用户随这条消息拖入,已存到本地)",
+    "需要其内容时用 extract_document(PDF/文本)按下列绝对路径读取,别让用户再贴一遍:",
+    ...paths.map((p) => `- ${p}`)
+  ].join("\n");
+}
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -468,6 +481,8 @@ function buildAdapter(
         buildSessionContext(),
         // 本轮选中的 gated 能力(browser/shell/schedule)guideline——随 selectTools 同门注入,无关任务不背。
         turnGuidelineBySession.get(sessionId),
+        // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
+        renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -584,6 +599,7 @@ export const agent = {
     selectorsBySession.clear();
     recentBySession.clear();
     turnGuidelineBySession.clear();
+    turnAttachmentsBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -634,13 +650,28 @@ export const agent = {
     broadcast("session:changed", sessions.list());
   },
 
-  async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
+  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[]): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
     const gen = (runGenBySession.get(sessionId) ?? 0) + 1;
     runGenBySession.set(sessionId, gen);
     const sessions = getSessions(activeWorkspaceId);
+
+    // 拖入的附件:拷进会话附件目录(可复现,原件被挪/删不影响重放),完整绝对路径经
+    // contextProvider 注入给 agent;用户消息只追加文件名,避免长路径污染气泡。
+    const savedPaths: string[] = [];
+    const names: string[] = [];
+    for (const src of attachments ?? []) {
+      try {
+        savedPaths.push(sessions.saveAttachment(sessionId, src));
+        names.push(basename(src));
+      } catch (err) {
+        console.warn(`[chat] 附件拷贝失败(忽略): ${src} — ${String(err)}`);
+      }
+    }
+    turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
+    const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
 
     let instance: PiAgentAdapter;
     try {
@@ -658,21 +689,21 @@ export const agent = {
       if (selector) {
         const prevRecent = recentBySession.get(sessionId) ?? new Set<Capability>();
         recentBySession.set(sessionId, new Set()); // 重置:本轮的累加从空开始
-        const selection = selector(text, prevRecent);
+        const selection = selector(userText, prevRecent);
         instance.setTools(selection.tools);
         // 本轮 gated guideline 存入槽,contextProvider(startTask 内被调)按轮读取注入,时序与 setTools 一致。
         turnGuidelineBySession.set(sessionId, selection.guideline);
       }
-      await instance.startTask({ text, conversationId: newConversationId() });
+      await instance.startTask({ text: userText, conversationId: newConversationId() });
       // 被后来的 send 顶替(用户在验收期发了新消息)→ 本轮已被打断,流由新 run 接管,
       // 这里不再发 done/error,也不抢着落盘(新 run 会落自己的)。
       if (runGenBySession.get(sessionId) !== gen) return;
       // 落盘:transcript 快照 + 首条用户消息自动命名(先截断占位)
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());
-      const placeholder = autoTitle(sessions, sessionId, text);
+      const placeholder = autoTitle(sessions, sessionId, userText);
       broadcast("session:changed", sessions.list());
       // 首轮:异步用 AI 升级标题,不阻塞本次回复完成
-      if (placeholder) void generateSessionTitle(sessions, sessionId, text, placeholder);
+      if (placeholder) void generateSessionTitle(sessions, sessionId, userText, placeholder);
       // pi 出错时不抛异常,错误落在 state 里——主动捞出来让 UI 看到,而非静默结束。
       const runError = instance.lastError();
       if (runError) {
@@ -736,6 +767,7 @@ export const agent = {
       selectorsBySession.delete(sessionId);
       recentBySession.delete(sessionId);
       turnGuidelineBySession.delete(sessionId);
+      turnAttachmentsBySession.delete(sessionId);
     }
   },
 

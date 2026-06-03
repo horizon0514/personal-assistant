@@ -3,8 +3,8 @@
  * transcript 对 infra 不透明(其类型 AgentMessage 属 pi,不外泄到 infra);
  * 这里只负责把它当 JSON 存取。它既喂 agent 恢复,又供渲染层重建 timeline。
  */
-import { rmSync } from "node:fs";
-import { join } from "node:path";
+import { copyFileSync, mkdirSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { readJson, writeJson, writeText } from "./persistence";
 
 export interface SessionRecord {
@@ -62,6 +62,25 @@ export class SessionStore {
     const p = this.tracePath(id);
     writeText(p, content);
     return p;
+  }
+
+  /** 本会话的附件目录(用户拖入的文件拷贝在此)。 */
+  private attachmentsDir(id: string): string {
+    return join(this.workspaceDir, "sessions", `${id}.attachments`);
+  }
+
+  /**
+   * 把一个外部文件拷进本会话附件目录,返回拷贝后的绝对路径(供 agent 用 extract_document 读)。
+   * 拷贝(而非引用原路径)是为会话可复现 —— 原文件被用户挪/删也不影响重放与验收复核。
+   * 文件名做安全化 + 短随机前缀去碰撞,杜绝路径穿越。
+   */
+  saveAttachment(id: string, srcPath: string): string {
+    const dir = this.attachmentsDir(id);
+    mkdirSync(dir, { recursive: true });
+    const safe = basename(srcPath).replace(/[/\\]/g, "_").slice(0, 120) || "file";
+    const dest = join(dir, `${crypto.randomUUID().slice(0, 8)}-${safe}`);
+    copyFileSync(srcPath, dest);
+    return dest;
   }
 
   /** 未归档会话,按最近活跃倒序。 */
@@ -153,5 +172,6 @@ export class SessionStore {
     this.persist();
     rmSync(this.transcriptPath(id), { force: true });
     rmSync(this.tracePath(id), { force: true });
+    rmSync(this.attachmentsDir(id), { recursive: true, force: true }); // 连带清掉拖入的附件
   }
 }
