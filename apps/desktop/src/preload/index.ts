@@ -3,6 +3,8 @@ import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
 export type { MemoryView };
+import type { EvalTelemetrySummary, PersistedEvalRecord } from "../main/eval-telemetry";
+export type { EvalTelemetrySummary, PersistedEvalRecord };
 import type { FileChangeOp } from "@pa/cap-filesystem";
 import type { WorkspaceRecord, SessionRecord, ScheduleRecord, ScheduleDraft } from "@pa/infra";
 
@@ -251,6 +253,10 @@ const api = {
       ipcRenderer.on("memory:changed", listener);
       return () => ipcRenderer.removeListener("memory:changed", listener);
     }
+  },
+  evalTelemetry: {
+    /** 读取 + 聚合验收 telemetry(全局,供设置窗「验收质量」面板) */
+    get: (): Promise<EvalTelemetrySummary> => ipcRenderer.invoke("evalTelemetry:get")
   }
 };
 
