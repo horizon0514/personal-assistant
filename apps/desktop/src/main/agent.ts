@@ -56,6 +56,7 @@ import {
 } from "@pa/domain-core";
 import { buildSystemPrompt, buildSessionContext, buildEvaluatorPrompt } from "./system-prompt";
 import { transcriptToTimeline, VIEWABLE_TOOLS } from "./transcript-to-timeline";
+import { recordEval } from "./eval-telemetry";
 import { keyStore } from "./key-store";
 
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
@@ -108,6 +109,23 @@ const EVALUATOR_TOOLS = new Set([
   "extract_document",
   "read_current_page"
 ]);
+
+// 验收门用:某次工具调用是否「改动了真实状态」。只读/纯聊天任务没动状态、又没契约时不验收
+// (避免无谓返工)。静态风险非 ReadOnly 即视为改动;exec_shell 按命令内容分级(纯只读命令不算)。
+const MUTATING_RISK = new Set<RiskLevel>(["ReversibleMutating", "Destructive", "ExternalStateChanging"]);
+const STATIC_TOOL_RISK: Readonly<Record<string, RiskLevel>> = {
+  ...filesystemToolRisk,
+  ...documentToolRisk,
+  ...browserToolRisk
+};
+function isMutatingTool(tool: string, argsText: string): boolean {
+  // exec_shell:风险取决于命令;同 gatekeeper 用 skill 自声明的"已知安全"模式判定,非只读才算改动。
+  if (tool === "exec_shell")
+    return classifyShellRisk(argsText, scanSkills(SKILLS_DIR).flatMap((s) => s.safeShell)) !== "ReadOnly";
+  if (tool === "plan_file_changes") return true; // 批量 move/delete,风险表外的特例(它内部自做审批)
+  const risk = STATIC_TOOL_RISK[tool];
+  return risk ? MUTATING_RISK.has(risk) : false; // 记忆/定时/propose_plan/ask 等不在表内 → 非"交付物式"改动,不触发验收
+}
 
 // ── 渐进披露:工具目录(catalog)与按用户轮次的选择 ─────────────
 // 设计:每条用户消息进来前,基于消息内容 + 上一轮真正用过的 capability,
@@ -429,6 +447,10 @@ function buildAdapter(
     apiKeyResolver: resolveApiKey,
     evaluator,
     planProvider: () => plansBySession.get(sessionId),
+    // 验收门:本轮改了真实状态 ∥ 有确认过的契约,才有可独立复核的客观靶子;纯只读/聊天跳过。
+    isMutatingTool,
+    // 可观测:每轮验收(评/不评)落盘成 JSONL,供离线评估门的松紧与成本。
+    onEvalTelemetry: (rec) => recordEval({ sessionId, source: background ? "scheduled" : "interactive" }, rec),
     // 执行轨迹落盘到会话目录(<sessionId>.trace.txt),返回绝对路径供验收器只读读取。
     writeTrace: (text) => getSessions(wsId).writeTrace(sessionId, text),
     systemPrompt: buildSystemPrompt({

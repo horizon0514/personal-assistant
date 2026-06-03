@@ -114,11 +114,14 @@
 > 启示与优先级见 [`research/agent-design-insights.md`](research/agent-design-insights.md)(对照 Anthropic 两篇工程文章)。建议落地顺序:trace → 子 Agent → 独立 evaluator + Sprint Contract → context reset → ACI 错误引导。
 
 - [ ] **P1 · 可观测(读 trace)**:轻量 trace 日志(每轮 token 数、压缩触发、工具调用序列、记忆写次数),解锁一批"靠假设"的 deferred 决策(记忆头部注入、history 常态长度、记忆写频率)。见 insights §5。
+  - 首步已落地(2026-06-02):**验收 telemetry** —— 每轮验收(评/不评 + 触发原因 + pass/blockers + 耗时 + verdict 原文)追加落盘 `userData/eval-telemetry.jsonl`(`apps/desktop/src/main/eval-telemetry.ts`;适配器经 `onEvalTelemetry` 出口)。先攒数据评估验收门松紧/成本,再扩到 token/压缩等全量 trace。
 - [ ] **P1 · 子 Agent(orchestrator-workers)**:浏览器/文档多步调研在隔离 worker 里跑,只把结论交回主线 —— 一次解决主 history 污染 + 工具 schema 膨胀 + context anxiety 三件事。`cap-browser`/「调研→产出」是首个用例。见 insights §2、prompt-cache §4.4/§5 P2(从 P2 提到 P1)。
 - [x] **独立 evaluator(非同体自评)+ 自动返工**(已落地):执行器跑完一个**调过工具**的任务后,由**独立、干净上下文**的 evaluator(只读工具子集 + `submit_verdict`)对照目标核查产出;不通过则把问题清单回灌执行器自动返工(evaluator-optimizer 闭环,默认最多 1 轮)。端口 `Evaluator`/`Verdict` 在 domain-core;实现 `createPiEvaluator` 在 ctx-task(起第二个 pi Agent);组合根 `agent.ts` 注入;ChatPane 显示验收结论(不持久化)。⚠️ `harness-design` 警告"自评必然过度自信",故刻意换独立 agent。见 insights §1。
-  - 暂未做:把 Verdict 持久化到 transcript、评估的成本 telemetry(待 trace)。
+  - 改进(2026-06-02):**①验收门重挂载** —— 触发从"调过任何工具"(`sawTool`,既误报纯只读/聊天、又对纯聊错答漏报)改为「**本轮改了真实状态 ∥ 有确认过的契约**」(`hadPlan || sawMutation`),只在有可独立复核的客观靶子时才验,直接掐掉"答得没问题却被挑刺返工"的噪声源(`isMutatingTool` 在 `agent.ts`,按静态风险非 ReadOnly + exec_shell 按命令分级)。**②verdict 结构化** —— `submit_verdict` 由 `{pass,issues}` 拆成 `blockers[](须附证据)`/`suggestions[](永不返工)`,pass 由 `blockers.length===0` 算出,把"可优化≠硬伤"从 prompt 软约束变成数据结构硬约束。**③telemetry 落盘**(见上 P1 可观测)。
+  - 暂未做:把 Verdict 持久化到 transcript;评估器跨返工轮只看到本轮 actionLog(非全程累积);返工耗尽 retry 后仍不过会静默发车(无终态"仍未通过"提示)。
 - [x] **Sprint Contract(动手前签约)+ 可评分标准**(已落地):执行器对**多步/有交付物**的开放任务,动手前调 `propose_contract` 起草「交付物 + 可核查验收标准」→ 用户内联确认/微调(可编辑卡)→ 锁定;确认后的契约既约束执行器,又作为 evaluator 的**逐条验收清单**。`SprintContract` 在 domain-core;`createContractTool` 在 ctx-task;`agent.ts` 经 `contract:request`/`resolve` 桥接确认卡 + 每会话存契约喂评估器;ChatPane `ContractCard`。触发=执行器自行判断(system prompt 软约束)。见 insights §4。
-  - 暂未做:契约持久化(刷新会话后卡片不留,仅 tool 调用在 transcript)、硬触发分类器(现靠软约束,模型可能漏签)、grading criteria 的加权打分(现为 criteria 逐条 pass/fail)。
+  - 触发强化(2026-06-02):system prompt 的「开工对齐」段从"适用于…"改成「命中即先 propose_plan」清单(产出报告/清单/表格/对比/文案,或多步且交付形态不明),让"调研→产出"类任务更可靠地先签约——这条契约现在也是验收门的触发条件之一,漏签会导致该验的不验。**刻意不上会阻塞执行、强弹确认卡的硬分类器**(反向骚扰风险 + 没数据定阈值),等 eval-telemetry 显示 plan 漏触发严重再说。
+  - 暂未做:契约持久化(刷新会话后卡片不留,仅 tool 调用在 transcript)、grading criteria 的加权打分(现为 criteria 逐条 pass/fail)。
 - [ ] **context reset(配合阶段 D durable-harness)**:长/后台任务用"做完→把结论写进 memory/journal→开干净 agent 接下一段"的结构化重置,绕开压缩消不掉的 context anxiety。见 insights §3、status-and-roadmap 阶段 D #10。
 - [ ] **工具能力兜底 + ACI 错误引导**:能力缺口会让 agent 兜圈(如曾经的"无法建目录")。受限 shell(高风险强制审批)是一条路;更便宜的一招是**让现有工具失败时返回引导性错误**(如 write_file 到不存在目录 → 提示"父目录不存在,可用 X")。见 insights §6。
 - [ ] **空闲压缩(暂缓,先做交互+功能)**:pi 现在只在快撑满时被动压缩(`shouldCompact` = `contextTokens > contextWindow - 16384`),且压缩走独立 summarization call(命中 0%)。文章决策 5 的优化是「用户停手/失焦时趁 cache 还热主动压」,避免长会话 TTL 过期后整段 history 全量 cold。**决策(2026-05-22):暂不做,先把交互和功能做扎实。** 启动前先确认 `pi-agent-core` 是否暴露手动 `compact()` 入口。背景见 [`research/prompt-cache-and-compaction.md`](research/prompt-cache-and-compaction.md) §2/§5。

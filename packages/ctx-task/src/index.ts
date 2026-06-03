@@ -35,6 +35,34 @@ import {
   type TaskId
 } from "@pa/domain-core";
 
+/**
+ * 一次验收的可观测记录(评了 / 没评 + 为何 + 结论 + 耗时)。逐条落盘成 JSONL,
+ * 用来回答"验收门松紧合不合适、误拦多少、值不值这个成本"——把调参从拍脑袋变成看数据。
+ */
+export interface EvalTelemetryRecord {
+  readonly taskId: TaskId;
+  readonly round: number;
+  /** 本轮是否真的起了验收器 */
+  readonly evaluated: boolean;
+  /** evaluated 时:因什么触发(有契约 / 改了状态 / 两者) */
+  readonly trigger?: "plan" | "mutation" | "plan+mutation";
+  /** 没评时:为何跳过 */
+  readonly skipReason?: "no-deliverable" | "aborted" | "error" | "no-evaluator";
+  readonly toolCalls: number;
+  /** 本轮是否动过真实状态(写/删/移/外部副作用) */
+  readonly mutated: boolean;
+  /** 本任务是否有用户确认过的开工契约 */
+  readonly hadPlan: boolean;
+  readonly pass?: boolean;
+  readonly blockers?: number;
+  readonly durationMs?: number;
+  readonly retrying?: boolean;
+  /** 用户意图原话(截断),给离线读 telemetry 时一眼看清这条是什么任务 */
+  readonly intentText?: string;
+  readonly summary?: string;
+  readonly issues?: readonly string[];
+}
+
 export { createPiEvaluator, type PiEvaluatorDeps } from "./evaluator";
 export { createPlanTool, type PlanToolDeps, type PlanConfirmation } from "./plan";
 export { createAskUserTool, type AskUserToolDeps } from "./ask-user";
@@ -143,6 +171,14 @@ export interface PiAgentAdapterDeps {
   readonly maxEvalRetries?: number;
   /** 取本次任务已确认的开工计划(若执行器跑过 propose_plan),作为评估的验收清单。 */
   readonly planProvider?: () => import("@pa/domain-core").WorkPlan | undefined;
+  /**
+   * 判定某次工具调用是否「改动了真实状态」(写/删/移/外部副作用)。供验收门用:
+   * 只读/纯聊天任务没动状态又没契约 → 没有可独立复核的客观靶子 → 不验收(避免无谓返工)。
+   * 入参带 argsText,让 exec_shell 这类"风险取决于命令内容"的工具能按命令分级。
+   */
+  readonly isMutatingTool?: (tool: string, argsText: string) => boolean;
+  /** 每轮验收的可观测出口(评/不评都记一笔,供离线分析门的松紧与成本)。 */
+  readonly onEvalTelemetry?: (rec: EvalTelemetryRecord) => void;
   /**
    * 落盘本次任务的执行轨迹(已渲染、带不可信围栏的可读文本),返回其绝对路径。
    * 验收器据此用只读工具读取完整轨迹。不提供则验收器只拿到内联截断摘要。
@@ -295,6 +331,8 @@ export class PiAgentAdapter {
     // start 事件带 args、end 事件带 result,按 toolCallId 对上。**逐 round 重置**(见 loop 顶部)——
     // 否则返工 round 里执行器只回文字也会触发 evaluator,且 evaluator 会拿到上一轮的动作日志而误判。
     let sawTool = false;
+    // 本轮是否动过真实状态(写/删/移/外部副作用)——验收门的客观靶子之一(另一为「有契约」)。
+    let sawMutation = false;
     const actionLog: ActionTraceEntry[] = [];
     const pendingArgs = new Map<string, string>();
 
@@ -317,10 +355,12 @@ export class PiAgentAdapter {
         pendingArgs.set(event.toolCallId, pickArgsText(event.args));
       }
       if (event.type === "tool_execution_end") {
+        const argsText = pendingArgs.get(event.toolCallId) ?? "";
+        if (!event.isError && this.deps.isMutatingTool?.(event.toolName, argsText)) sawMutation = true;
         actionLog.push({
           tool: event.toolName,
           ok: !event.isError,
-          args: pendingArgs.get(event.toolCallId) || undefined,
+          args: argsText || undefined,
           result: extractResultText(event.result) || undefined
         });
         pendingArgs.delete(event.toolCallId);
@@ -355,19 +395,44 @@ export class PiAgentAdapter {
         // 本轮累加器清零:evaluator 看到的"调过什么"必须是"本轮调过的"。
         // subscribe 是 startTask 全程注册一次,这些 let/array 通过闭包共享——重置完再 await 就行。
         sawTool = false;
+        sawMutation = false;
         actionLog.length = 0;
         pendingArgs.clear();
         pendingFinalText = "";
         await this.agent.prompt(prompt);
 
-        // 无评估器 / 没调过工具(纯聊天)/ 被用户中断 / 本轮带错误收尾 → 不验收,直接结束(final 已流式呈现)
-        if (!this.deps.evaluator || !sawTool || this.aborted || this.agent.state.errorMessage) {
+        // 验收门:要么本轮**改动了真实状态**(sawMutation),要么任务有**用户确认过的开工契约**(hadPlan)——
+        // 这两者才给验收器可对照的客观靶子。纯只读/纯聊天(没动状态又没契约)没什么可独立复核的,跳过
+        // (这正是过去"答得没问题却被挑刺返工"的噪声源)。再叠加:无评估器 / 被中断 / 带错误收尾也不验。
+        const hadPlan = !!this.deps.planProvider?.();
+        const blocked = !this.deps.evaluator || this.aborted || !!this.agent.state.errorMessage;
+        if (blocked || (!hadPlan && !sawMutation)) {
+          // 本轮**有动作却没验收** → 记一笔为何没验(纯聊天无动作不记,避免噪声),供离线评估门的松紧。
+          if (sawTool) {
+            this.deps.onEvalTelemetry?.({
+              taskId,
+              round,
+              evaluated: false,
+              skipReason: !this.deps.evaluator
+                ? "no-evaluator"
+                : this.aborted
+                  ? "aborted"
+                  : this.agent.state.errorMessage
+                    ? "error"
+                    : "no-deliverable",
+              toolCalls: actionLog.length,
+              mutated: sawMutation,
+              hadPlan,
+              intentText: intent.text.slice(0, 200)
+            });
+          }
           break;
         }
 
         this.deps.onEvent({ type: "EvaluationStarted", taskId, round });
         // 落盘完整执行轨迹(带不可信围栏),把路径给验收器:内联看摘要,要细节自己去读这个文件。
         const tracePath = this.deps.writeTrace?.(renderActionTrace(actionLog));
+        const startedAt = Date.now();
         const verdict = await this.deps.evaluator.evaluate({
           taskId,
           intent,
@@ -377,6 +442,7 @@ export class PiAgentAdapter {
           tracePath,
           signal: this.evalController?.signal
         });
+        const durationMs = Date.now() - startedAt;
         const willRetry = !verdict.pass && round < maxRetries && !this.aborted;
         this.deps.onEvent({
           type: "EvaluationCompleted",
@@ -386,6 +452,22 @@ export class PiAgentAdapter {
           issues: [...verdict.issues],
           summary: verdict.summary,
           retrying: willRetry
+        });
+        this.deps.onEvalTelemetry?.({
+          taskId,
+          round,
+          evaluated: true,
+          trigger: hadPlan && sawMutation ? "plan+mutation" : hadPlan ? "plan" : "mutation",
+          toolCalls: actionLog.length,
+          mutated: sawMutation,
+          hadPlan,
+          pass: verdict.pass,
+          blockers: verdict.issues.length,
+          durationMs,
+          retrying: willRetry,
+          intentText: intent.text.slice(0, 200),
+          summary: verdict.summary,
+          issues: [...verdict.issues]
         });
 
         if (willRetry) {
