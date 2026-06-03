@@ -19,7 +19,7 @@ import { extname, join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
-import { LiteParse } from "@llamaindex/liteparse";
+import { LiteParse, type ParseResult } from "@llamaindex/liteparse";
 import { PaddleOcrService } from "ppu-paddle-ocr";
 
 const CAPABILITY: Capability = "document";
@@ -54,6 +54,31 @@ export interface DocumentToolsOptions {
    * OCR(尤其首次下模型 / 逐页识别)耗时,经此把"正在识别…"亮给用户,避免看着像静默跳过。
    */
   readonly onProgress?: (actionId: string, note: string) => void;
+}
+
+/** 接地引用的最小单位:某页(或某段)的文本。PDF 按页;纯文本类为单段(page=1)。 */
+export interface PageText {
+  readonly page: number;
+  readonly text: string;
+}
+
+/**
+ * 结构化抽取结果 —— Notebook(来源集)接地引用的地基:保住逐页文本而非拍平成一坨。
+ * 见 research/notebook-design.md §4 M0。
+ */
+export interface ExtractResult {
+  readonly path: string;
+  readonly kind: "pdf" | "text" | "unsupported";
+  /** 逐页/分段文本(已去空页;纯文本类未 trim,保原样)。unsupported/解析失败为空。 */
+  readonly pages: PageText[];
+  /** PDF 总页数;可能 > pages.length(空页被滤、或扫描件仅 OCR 了前 N 页)。 */
+  readonly pageCount?: number;
+  /** 是否走了扫描件 OCR。 */
+  readonly ocr: boolean;
+  /** 解析失败(加密/损坏 PDF)。 */
+  readonly error?: boolean;
+  /** 失败原因 / 不支持格式的说明(供工具层回给用户)。 */
+  readonly note?: string;
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
@@ -132,17 +157,17 @@ function getPaddle(dir: string): Promise<PaddleOcrService> {
   return paddlePromise;
 }
 
-/** 扫描件 OCR:逐页渲染成图 → PaddleOCR 读。返回拼好的文本(失败/无模型 → 空串)。 */
+/** 扫描件 OCR:逐页渲染成图 → PaddleOCR 读。返回逐页文本(失败/无模型 → 空数组)。 */
 async function ocrScannedPdf(
   buf: Buffer,
   pageCount: number,
   modelRoot: string,
   onNote: (note: string) => void
-): Promise<string> {
+): Promise<PageText[]> {
   const dir = join(modelRoot, MODEL_VARIANT); // 变体子目录,换模型自动重下
   const needDownload = PADDLE_MODELS.some((m) => !existsSync(join(dir, m.file)));
   onNote(needDownload ? "扫描件:首次需下载 OCR 模型(约 21MB),稍候…" : "扫描件:正在 OCR 识别…");
-  if (!(await ensurePaddleModels(dir))) return "";
+  if (!(await ensurePaddleModels(dir))) return [];
 
   const svc = await getPaddle(dir);
   const total = Math.min(pageCount || 1, MAX_OCR_PAGES);
@@ -150,14 +175,100 @@ async function ocrScannedPdf(
   onNote(`扫描件:正在 OCR 识别(共 ${total} 页)…`);
   const shots = await getRenderParser().screenshot(buf, nums);
 
-  const parts: string[] = [];
+  const pages: PageText[] = [];
   for (const shot of shots) {
     const r = await svc.recognize(toArrayBuffer(shot.imageBuffer));
     const t = r.text.trim();
-    if (t) parts.push(total > 1 ? `【第 ${shot.pageNum} 页】\n${t}` : t);
+    if (t) pages.push({ page: shot.pageNum, text: t });
   }
-  if (pageCount > MAX_OCR_PAGES) parts.push(`(文档共 ${pageCount} 页,仅 OCR 了前 ${MAX_OCR_PAGES} 页)`);
-  return parts.join("\n\n");
+  return pages;
+}
+
+/**
+ * 结构化抽取:把一份本地文档抽成**逐页文本**(ExtractResult),保住页码以支撑引用接地。
+ *
+ * 这是无状态、可复用的核心入口 —— Notebook(来源集)入库时直接调它拿逐页缓存,
+ * 不必走 agent 的 extract_document 工具(那层只是把它拍平成给模型读的扁平文本)。见 notebook-design.md §4 M0。
+ *
+ * @param actionId 仅用于 OCR 进度上报(透传给 onProgress);非 OCR 路径无副作用。
+ */
+export async function extractDocument(
+  path: string,
+  opts: DocumentToolsOptions,
+  actionId = ""
+): Promise<ExtractResult> {
+  const ext = extname(path).toLowerCase();
+
+  if (ext === ".pdf") {
+    const buf = await readFile(path);
+    // 第一遍:数字抽取(快,不 OCR)。有嵌入文本就直接返回,绝大多数 PDF 走这条。
+    let parsed: ParseResult;
+    try {
+      parsed = await getDigitalParser().parse(buf);
+    } catch (err) {
+      return {
+        path,
+        kind: "pdf",
+        pages: [],
+        ocr: false,
+        error: true,
+        note: `PDF 解析失败:${err instanceof Error ? err.message : String(err)}`
+      };
+    }
+    const pageCount = parsed.pages.length;
+    // 逐页文本(liteparse 的 pages[].text);滤掉空页,但页码保留原值。
+    const digital = parsed.pages.map((p) => ({ page: p.pageNum, text: p.text.trim() })).filter((p) => p.text);
+    if (digital.length) {
+      return { path, kind: "pdf", pages: digital, pageCount, ocr: false };
+    }
+
+    // 抽不到文本 = 扫描件/图片型 → PaddleOCR(按需下模型 + 逐页读图)。
+    try {
+      const ocrPages = await ocrScannedPdf(buf, pageCount, opts.ocrModelDir, (note) =>
+        opts.onProgress?.(actionId, note)
+      );
+      if (ocrPages.length) {
+        return { path, kind: "pdf", pages: ocrPages, pageCount, ocr: true };
+      }
+    } catch (err) {
+      console.warn(`[cap-document] OCR 失败: ${String(err)}`);
+    }
+    return {
+      path,
+      kind: "pdf",
+      pages: [],
+      pageCount,
+      ocr: true,
+      note: "(扫描件/图片型 PDF,OCR 未能识别出文本;若刚联网下载模型失败可稍后重试)"
+    };
+  }
+
+  if (PLAINTEXT_EXT.has(ext)) {
+    const raw = await readFile(path, "utf8"); // 原样不 trim(纯文本即正文,首尾空白可能有意义)
+    return { path, kind: "text", pages: [{ page: 1, text: raw }], ocr: false };
+  }
+
+  return {
+    path,
+    kind: "unsupported",
+    pages: [],
+    ocr: false,
+    note: `不支持的文档格式:${ext || "(无扩展名)"}。当前支持 PDF(含扫描件)与纯文本类。`
+  };
+}
+
+/**
+ * 把逐页结构拍平成给模型读的扁平文本:多页 PDF 加「第 N 页」锚(让模型作答时能引用页码),
+ * 单页 PDF / 纯文本不加锚。扫描件仅 OCR 了前 N 页时补一行说明(沿用旧行为)。
+ */
+function flattenPages(r: ExtractResult): string {
+  if (r.pages.length === 0) return r.note ?? "";
+  const multi = r.kind === "pdf" && r.pages.length > 1;
+  const body = r.pages.map((p) => (multi ? `【第 ${p.page} 页】\n${p.text}` : p.text)).join("\n\n");
+  if (r.ocr && r.pageCount && r.pageCount > MAX_OCR_PAGES) {
+    return `${body}\n\n(文档共 ${r.pageCount} 页,仅 OCR 了前 ${MAX_OCR_PAGES} 页)`;
+  }
+  return body;
 }
 
 const extractParams = Type.Object({
@@ -173,69 +284,31 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
       "需要理解一份文档内容时用它,而不是猜测。",
     parameters: extractParams,
     execute: async (id, { path }) => {
-      const ext = extname(path).toLowerCase();
+      const r = await extractDocument(path, opts, id);
 
-      if (ext === ".pdf") {
-        const buf = await readFile(path);
-        // 第一遍:数字抽取(快,不 OCR)。有嵌入文本就直接返回,绝大多数 PDF 走这条。
-        let parsed: { text: string; pages: { length: number } };
-        try {
-          parsed = await getDigitalParser().parse(buf);
-        } catch (err) {
-          return textResult(`PDF 解析失败:${err instanceof Error ? err.message : String(err)}`, {
-            path,
-            kind: "pdf",
-            error: true
-          });
-        }
-        const digital = clip(parsed.text.trim());
-        if (digital.text) {
-          return textResult(digital.text, {
-            path,
-            kind: "pdf",
-            pages: parsed.pages.length,
-            chars: digital.text.length,
-            truncated: digital.truncated,
-            ocr: false
-          });
-        }
-
-        // 抽不到文本 = 扫描件/图片型 → PaddleOCR(按需下模型 + 逐页读图)。
-        try {
-          const text = await ocrScannedPdf(buf, parsed.pages.length, opts.ocrModelDir, (note) =>
-            opts.onProgress?.(id, note)
-          );
-          const ocr = clip(text);
-          if (ocr.text) {
-            return textResult(ocr.text, {
-              path,
-              kind: "pdf",
-              pages: parsed.pages.length,
-              chars: ocr.text.length,
-              truncated: ocr.truncated,
-              ocr: true
-            });
-          }
-        } catch (err) {
-          console.warn(`[cap-document] OCR 失败: ${String(err)}`);
-        }
-        return textResult("(扫描件/图片型 PDF,OCR 未能识别出文本;若刚联网下载模型失败可稍后重试)", {
-          path,
-          kind: "pdf",
-          pages: parsed.pages.length,
-          chars: 0
-        });
+      if (r.kind === "unsupported") {
+        return textResult(r.note ?? "不支持的文档格式。", { path, kind: "unsupported" });
+      }
+      if (r.error) {
+        return textResult(r.note ?? "解析失败。", { path, kind: r.kind, error: true });
       }
 
-      if (PLAINTEXT_EXT.has(ext)) {
-        const raw = await readFile(path, "utf8");
-        const { text, truncated } = clip(raw);
+      const { text, truncated } = clip(flattenPages(r));
+
+      if (r.kind === "text") {
         return textResult(text, { path, kind: "text", chars: text.length, truncated });
       }
-
-      return textResult(`不支持的文档格式:${ext || "(无扩展名)"}。当前支持 PDF(含扫描件)与纯文本类。`, {
+      // PDF:pages 为空 = 扫描件未识别出文本(text 此时是说明文案,chars 记 0)。
+      if (r.pages.length === 0) {
+        return textResult(text, { path, kind: "pdf", pages: r.pageCount ?? 0, chars: 0 });
+      }
+      return textResult(text, {
         path,
-        kind: "unsupported"
+        kind: "pdf",
+        pages: r.pageCount ?? r.pages.length,
+        chars: text.length,
+        truncated,
+        ocr: r.ocr
       });
     }
   };
@@ -258,6 +331,7 @@ export const documentGuidelines = `## 文档提取
 - 扫描件/图片型 PDF 它会自动 OCR(PaddleOCR,中文与表格识别强;首次会联网下模型,稍慢)。识别不清处如实说明,别编造。
 - **别自己用 shell 调 tesseract / pdftotext / pdftoppm / pytesseract 等去"重试 OCR"**:extract_document 内建的就是更强的方案,
   shell 兜底只会更慢更乱、还依赖用户机器装没装。读不准就如实说明。
-- 大文档会被截断;只关心局部就先 extract 看全貌再按需定位。`;
+- 大文档会被截断;只关心局部就先 extract 看全貌再按需定位。
+- 多页 PDF 的抽取结果按「第 N 页」分段标注;**引用某句话时带上页码**(如「据第 3 页…」),别让用户回去自己翻。`;
 
 export { CAPABILITY as documentCapability };

@@ -39,7 +39,8 @@ import {
   filesystemToolRisk,
   type FileChangeOp
 } from "@pa/cap-filesystem";
-import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
+import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines, extractDocument } from "@pa/cap-document";
+import { NotebookStore, createNotebookTools, notebookToolNames, notebookGuidelines, addSourceToNotebook } from "@pa/ctx-notebook";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
@@ -89,6 +90,7 @@ const capabilityByTool = new Map<string, Capability>();
 for (const t of memoryToolNames) capabilityByTool.set(t, "memory");
 for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
+for (const t of notebookToolNames) capabilityByTool.set(t, "notebook");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 for (const t of shellToolNames) capabilityByTool.set(t, "shell");
 capabilityByTool.set(searchHistoryToolName, "memory"); // 跨对话回忆,归入记忆能力
@@ -104,6 +106,9 @@ const EVALUATOR_TOOLS = new Set([
   "find_files",
   "grep_files",
   "extract_document",
+  "notebook_list",
+  "notebook_search",
+  "notebook_read_source",
   "read_current_page"
 ]);
 
@@ -170,6 +175,10 @@ const CAPABILITY_DESCRIPTIONS = [
   },
   { name: "document", summary: "本地文档抽取(PDF / 纯文本类)成纯文本以便阅读总结。" },
   {
+    name: "notebook",
+    summary: "知识库(来源集):把若干本地文档攒进一个库并缓存逐页文本,便于基于这批资料反复问答;可新建/加入/查看/移出来源。详见下方「知识库」指南。"
+  },
+  {
     name: "browser",
     summary: "内置浏览器调研与操作:搜索、抓正文(可后台并发)、可见面板打开/读当前、点击/输入/截图。详见下方「网页调研」「网页操作」指南。"
   },
@@ -202,6 +211,9 @@ const turnGuidelineBySession = new Map<string, string>();
 // 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
 // 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
 const turnAttachmentsBySession = new Map<string, string[]>();
+// 每会话「绑定的知识库名」(渲染层选定后随每条消息带上,跨轮粘住;contextProvider 按轮注入,
+// 让本对话默认在该库内检索/作答,免得用户每句都报库名)。空/未设=不绑定。
+const boundNotebookBySession = new Map<string, string>();
 
 /** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
 function renderTurnAttachments(paths: string[] | undefined): string | undefined {
@@ -210,6 +222,28 @@ function renderTurnAttachments(paths: string[] | undefined): string | undefined 
     "## 本轮附件(用户随这条消息拖入,已存到本地)",
     "需要其内容时用 extract_document(PDF/文本)按下列绝对路径读取,别让用户再贴一遍:",
     ...paths.map((p) => `- ${p}`)
+  ].join("\n");
+}
+
+/**
+ * 把「本对话绑定的知识库」渲染成给 agent 的上下文块。
+ * 库不存在(被删/改名)→ undefined,不注入,避免误导模型去搜一个空库。
+ */
+function renderBoundNotebook(name: string | undefined, wsId: string): string | undefined {
+  if (!name) return undefined;
+  const nb = getNotebook(wsId).getNotebook(name);
+  if (!nb) return undefined;
+  const list = nb.sources.length
+    ? nb.sources.map((s) => `- ${s.name}(${s.pageCount} 页${s.error ? "、⚠ 未识别" : ""})`).join("\n")
+    : "(暂无来源)";
+  return [
+    `## 当前对话已绑定知识库「${nb.name}」`,
+    "用户在此对话里的提问,默认就是问这个知识库——除非用户明确转向别处:",
+    "- 优先用 notebook_search / notebook_read_source 在本库内检索、读原文,据此作答并标页码引用(如 [xx.pdf, p.3])。",
+    "- 只依据本库来源,别用先验知识硬补;库里确实没有就直说,并说明搜了哪些词。",
+    "- 用户说「加这份 / 收进来」时,notebook_add_source 默认加到本库。",
+    `本库现有来源(${nb.sourceCount} 份):`,
+    list
   ].join("\n");
 }
 
@@ -244,6 +278,16 @@ function getMemory(wsId: string): MemoryStore {
   if (!s) {
     s = new MemoryStore(workspaces.memoryPath(wsId));
     memoryStores.set(wsId, s);
+  }
+  return s;
+}
+
+const notebookStores = new Map<string, NotebookStore>();
+function getNotebook(wsId: string): NotebookStore {
+  let s = notebookStores.get(wsId);
+  if (!s) {
+    s = new NotebookStore(workspaces.notebooksDir(wsId));
+    notebookStores.set(wsId, s);
   }
   return s;
 }
@@ -289,6 +333,9 @@ function broadcast(channel: string, payload: unknown): void {
 }
 function broadcastMemory(wsId: string): void {
   broadcast("memory:changed", { wsId, items: getMemory(wsId).list() });
+}
+function broadcastNotebooks(wsId: string): void {
+  broadcast("notebook:changed", { wsId, notebooks: getNotebook(wsId).listNotebooks() });
 }
 /** 定时任务 NL 工具:模型从一句话建/查/改/删,变更后广播 schedule:changed 让面板实时刷新。 */
 const scheduleTools = createScheduleTools({
@@ -357,12 +404,18 @@ function buildAdapter(
   const memory = getMemory(wsId);
   const model = createModel({ provider: PROVIDER, modelId: MODEL });
   // 文档工具:OCR 是基础能力,模型缓存目录固定注入;onProgress 把"正在识别/下载"亮到 step 行。
-  const documentTools = createDocumentTools({
-    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
-    onProgress: (actionId, note) => {
-      if (!background) sendTo("step:progress", { actionId, note });
-    }
-  });
+  const ocrModelDir = join(app.getPath("userData"), "paddleocr");
+  const onDocProgress = (actionId: string, note: string): void => {
+    if (!background) sendTo("step:progress", { actionId, note });
+  };
+  const documentTools = createDocumentTools({ ocrModelDir, onProgress: onDocProgress });
+  // 知识库(来源集):入库复用 cap-document 的抽取器(注入,保持 ctx-notebook 与 cap 解耦);每 workspace 一份。
+  // onChange → 广播 notebook:changed,agent 在对话里增删来源时左侧面板实时刷新。
+  const notebookTools = createNotebookTools(
+    getNotebook(wsId),
+    (path, actionId) => extractDocument(path, { ocrModelDir, onProgress: onDocProgress }, actionId),
+    () => broadcastNotebooks(wsId)
+  );
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -376,6 +429,13 @@ function buildAdapter(
       capability: "document",
       alwaysOn: true,
       tools: documentTools
+    },
+    {
+      // 知识库:add/list/remove(增删=本地 manifest,可见可逆)。alwaysOn 保证模型知道有此能力,
+      // 不致退化成每次重新 extract_document。基于库内容的检索/带引用问答在后续版本(M2)。
+      capability: "notebook",
+      alwaysOn: true,
+      tools: notebookTools
     },
     {
       capability: "memory",
@@ -468,7 +528,14 @@ function buildAdapter(
       capabilities: CAPABILITY_DESCRIPTIONS,
       // 只放 always-on 能力的 guideline(每轮都在,留冻结=零缓存损失)。browser/schedule 均为 always-on,故其指南也在此。
       // 仍 gated 的能力(仅 shell)的 guideline 挂在 catalog 上,随 selectTools 经 contextProvider 按轮注入。
-      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines, browserGuidelines, scheduleGuidelines]
+      guidelines: [
+        filesystemGuidelines,
+        documentGuidelines,
+        notebookGuidelines,
+        memoryGuidelines,
+        browserGuidelines,
+        scheduleGuidelines
+      ]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
@@ -487,6 +554,7 @@ function buildAdapter(
         turnGuidelineBySession.get(sessionId),
         // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
         renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
+        renderBoundNotebook(boundNotebookBySession.get(sessionId), wsId),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -503,7 +571,8 @@ function buildAdapter(
           call.tool === "use_skill" ||
           call.tool === searchHistoryToolName || // 跨对话回忆,只读
           scheduleToolNames.has(call.tool) || // 定时任务增删改:可见(面板+聊天回报)、可逆,自动跑不弹审批
-          memoryToolNames.has(call.tool)
+          memoryToolNames.has(call.tool) ||
+          notebookToolNames.has(call.tool) // 知识库增删:本地 manifest、可见、软删可恢复,自动执行不弹审批
         )
           return "ReadOnly";
         // exec_shell 风险取决于命令内容:纯只读自动跑,写/改/拿不准的走审批。
@@ -598,12 +667,14 @@ export const agent = {
   deleteWorkspace(wsId: string): { workspaces: WorkspaceRecord[]; activeWorkspaceId: string } {
     workspaces.remove(wsId);
     memoryStores.delete(wsId);
+    notebookStores.delete(wsId);
     sessionStores.delete(wsId);
     adapters.clear(); // 简单起见全清,下次按需从磁盘 transcript 重建
     selectorsBySession.clear();
     recentBySession.clear();
     turnGuidelineBySession.clear();
     turnAttachmentsBySession.clear();
+    boundNotebookBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -654,7 +725,7 @@ export const agent = {
     broadcast("session:changed", sessions.list());
   },
 
-  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[]): Promise<void> {
+  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[], notebook?: string): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
@@ -675,6 +746,9 @@ export const agent = {
       }
     }
     turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
+    // 绑定的知识库:渲染层每轮带上,粘住直到用户解绑(传空)。
+    if (notebook && notebook.trim()) boundNotebookBySession.set(sessionId, notebook.trim());
+    else boundNotebookBySession.delete(sessionId);
     const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
 
     let instance: PiAgentAdapter;
@@ -816,6 +890,41 @@ export const agent = {
   restoreMemory(wsId: string, id: string): void {
     getMemory(wsId).restore(id);
     broadcastMemory(wsId);
+  },
+
+  // Notebook(知识库,按 wsId 参数化)——左侧面板只读浏览。
+  listNotebooks: (wsId: string) => getNotebook(wsId).listNotebooks(),
+  notebookDetail: (wsId: string, name: string) => getNotebook(wsId).getNotebook(name) ?? null,
+  /** 读某来源的逐页全文(供右栏查看 / 引用跳转)。 */
+  readNotebookSource(wsId: string, name: string, ref: string) {
+    const s = getNotebook(wsId).getSource(name, ref);
+    return s ? { id: s.id, name: s.name, pageCount: s.pageCount, ocr: s.ocr, pages: s.pages } : null;
+  },
+  /** UI 新建空知识库(之后往里加来源)。 */
+  createNotebook(wsId: string, name: string) {
+    const nb = getNotebook(wsId).ensureNotebook(name);
+    broadcastNotebooks(wsId);
+    return { id: nb.id, name: nb.name };
+  },
+  /** UI 加来源(选文件/拖入触发):复用与对话工具同一条入库逻辑(抽取+去重+留痕)。 */
+  async addNotebookSource(wsId: string, notebook: string, path: string) {
+    const ocrModelDir = join(app.getPath("userData"), "paddleocr");
+    const r = await addSourceToNotebook(
+      getNotebook(wsId),
+      (p, actionId) => extractDocument(p, { ocrModelDir }, actionId),
+      notebook,
+      path
+    );
+    if (r.status !== "unsupported") broadcastNotebooks(wsId);
+    if (r.status === "reused") return { status: "reused" as const, name: r.source.name };
+    if (r.status === "unsupported") return { status: "unsupported" as const, note: r.note };
+    return { status: "added" as const, name: r.source.name, error: !!r.source.error, note: r.source.note };
+  },
+  /** UI 移出来源(软删,可恢复)。 */
+  removeNotebookSource(wsId: string, notebook: string, ref: string) {
+    const removed = getNotebook(wsId).removeSource(notebook, ref);
+    if (removed) broadcastNotebooks(wsId);
+    return { removed: !!removed };
   },
 
   listJournal: () => journal.list(),

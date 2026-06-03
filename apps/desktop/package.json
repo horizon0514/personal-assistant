@@ -34,6 +34,7 @@
     "@pa/cap-filesystem": "workspace:*",
     "@pa/cap-shell": "workspace:*",
     "@pa/ctx-memory": "workspace:*",
+    "@pa/ctx-notebook": "workspace:*",
     "@pa/ctx-reversibility": "workspace:*",
     "@pa/ctx-skill": "workspace:*",
     "@pa/ctx-task": "workspace:*",

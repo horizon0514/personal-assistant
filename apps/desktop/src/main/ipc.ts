@@ -2,7 +2,7 @@
  * IPC 注册:把渲染层通道映射到 agent facade。
  * 分组:workspace / session / chat / approval / batch / reversibility / memory。
  */
-import { type IpcMainEvent, ipcMain } from "electron";
+import { type IpcMainEvent, ipcMain, dialog } from "electron";
 import type { ScheduleDraft } from "@pa/infra";
 import { agent } from "./agent";
 import { schedules } from "./scheduler";
@@ -44,8 +44,10 @@ export function registerIpc(): void {
 
   // Conversation
   ipcMain.handle("chat:model", () => agent.modelLabel());
-  ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[] }) =>
-    void agent.send(e.sender, p.sessionId, p.text, p.attachments)
+  ipcMain.on(
+    "chat:send",
+    (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[]; notebook?: string }) =>
+      void agent.send(e.sender, p.sessionId, p.text, p.attachments, p.notebook)
   );
   ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 
@@ -105,4 +107,33 @@ export function registerIpc(): void {
   ipcMain.handle("memory:listForgotten", (_e, wsId: string) => agent.listForgottenMemory(wsId));
   ipcMain.on("memory:remove", (_e, p: { wsId: string; id: string }) => agent.removeMemory(p.wsId, p.id));
   ipcMain.on("memory:restore", (_e, p: { wsId: string; id: string }) => agent.restoreMemory(p.wsId, p.id));
+
+  // 知识库:只读浏览 + UI 增删(增删也广播 notebook:changed,与对话工具一致刷新)
+  ipcMain.handle("notebook:list", (_e, wsId: string) => agent.listNotebooks(wsId));
+  ipcMain.handle("notebook:get", (_e, p: { wsId: string; name: string }) => agent.notebookDetail(p.wsId, p.name));
+  ipcMain.handle("notebook:readSource", (_e, p: { wsId: string; name: string; ref: string }) =>
+    agent.readNotebookSource(p.wsId, p.name, p.ref)
+  );
+  ipcMain.handle("notebook:create", (_e, p: { wsId: string; name: string }) => agent.createNotebook(p.wsId, p.name));
+  ipcMain.handle("notebook:addSource", (_e, p: { wsId: string; notebook: string; path: string }) =>
+    agent.addNotebookSource(p.wsId, p.notebook, p.path)
+  );
+  ipcMain.handle("notebook:removeSource", (_e, p: { wsId: string; notebook: string; ref: string }) =>
+    agent.removeNotebookSource(p.wsId, p.notebook, p.ref)
+  );
+  // 知识库导入:限文档类型;聊天「+」菜单的「添加附件」:不限类型。共用一个多选选择框。
+  ipcMain.handle("notebook:pickFiles", () =>
+    pickFiles("选择要加入知识库的文档", [
+      { name: "支持的文档", extensions: ["pdf", "txt", "md", "markdown", "csv", "tsv", "json", "log", "xml", "yaml", "yml"] },
+      { name: "PDF", extensions: ["pdf"] },
+      { name: "全部文件", extensions: ["*"] }
+    ])
+  );
+  ipcMain.handle("dialog:pickFiles", () => pickFiles("选择文件"));
+}
+
+/** 系统文件选择框(多选),返回绝对路径数组(取消则空);filters 不传=不限类型。 */
+async function pickFiles(title: string, filters?: Electron.FileFilter[]): Promise<string[]> {
+  const res = await dialog.showOpenDialog({ title, properties: ["openFile", "multiSelections"], filters });
+  return res.canceled ? [] : res.filePaths;
 }

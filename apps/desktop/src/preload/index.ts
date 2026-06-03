@@ -3,6 +3,8 @@ import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
 export type { MemoryView };
+import type { NotebookView, SourceView, PageText } from "@pa/ctx-notebook";
+export type { NotebookView, SourceView, PageText };
 import type { EvalTelemetrySummary, PersistedEvalRecord } from "../main/eval-telemetry";
 export type { EvalTelemetrySummary, PersistedEvalRecord };
 import type { UpdateStatus } from "../main/updater";
@@ -29,6 +31,29 @@ export interface ApiKeyStatus {
 export interface MemoryChange {
   wsId: string;
   items: MemoryView[];
+}
+
+/** notebook:changed 负载:带 wsId,消费方按所选 workspace 过滤。 */
+export interface NotebookChange {
+  wsId: string;
+  notebooks: NotebookView[];
+}
+
+/** 读取某来源的逐页全文(右栏查看 / 引用跳转)。 */
+export interface NotebookSourceContent {
+  id: string;
+  name: string;
+  pageCount: number;
+  ocr: boolean;
+  pages: PageText[];
+}
+
+/** UI 加来源的结果。 */
+export interface NotebookAddResult {
+  status: "added" | "reused" | "unsupported";
+  name?: string;
+  error?: boolean;
+  note?: string;
 }
 
 /** 重建历史会话用的 timeline 项(由主进程从 transcript 映射,与实时事件形状一致)。 */
@@ -130,11 +155,13 @@ const api = {
   },
   /** 拖入文件:在渲染层从 File 对象取其本地绝对路径(Electron 33 起 File.path 已移除,须用 webUtils)。 */
   files: {
-    pathForDropped: (file: File): string => webUtils.getPathForFile(file)
+    pathForDropped: (file: File): string => webUtils.getPathForFile(file),
+    /** 系统文件选择框:选任意文件作为聊天附件,返回绝对路径数组(取消则空)。 */
+    pick: (): Promise<string[]> => ipcRenderer.invoke("dialog:pickFiles")
   },
   chat: {
-    send: (sessionId: string, text: string, attachments?: string[]): void =>
-      ipcRenderer.send("chat:send", { sessionId, text, attachments }),
+    send: (sessionId: string, text: string, attachments?: string[], notebook?: string): void =>
+      ipcRenderer.send("chat:send", { sessionId, text, attachments, notebook }),
     /** 停止当前会话正在进行的运行 */
     stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
@@ -265,6 +292,32 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: MemoryChange): void => cb(payload);
       ipcRenderer.on("memory:changed", listener);
       return () => ipcRenderer.removeListener("memory:changed", listener);
+    }
+  },
+  notebook: {
+    /** 当前 workspace 的全部知识库(概览:名 + 来源数 + 来源清单) */
+    list: (wsId: string): Promise<NotebookView[]> => ipcRenderer.invoke("notebook:list", wsId),
+    /** 单个知识库详情(按名);不存在返回 null */
+    get: (wsId: string, name: string): Promise<NotebookView | null> => ipcRenderer.invoke("notebook:get", { wsId, name }),
+    /** 读某来源的逐页全文(ref=来源名/文件名片段/路径片段);不存在返回 null */
+    readSource: (wsId: string, name: string, ref: string): Promise<NotebookSourceContent | null> =>
+      ipcRenderer.invoke("notebook:readSource", { wsId, name, ref }),
+    /** 新建空知识库(之后往里加来源) */
+    create: (wsId: string, name: string): Promise<{ id: string; name: string }> =>
+      ipcRenderer.invoke("notebook:create", { wsId, name }),
+    /** 加一份来源(选文件/拖入触发);抽取+入库,返回结果 */
+    addSource: (wsId: string, notebook: string, path: string): Promise<NotebookAddResult> =>
+      ipcRenderer.invoke("notebook:addSource", { wsId, notebook, path }),
+    /** 移出一份来源(软删,可恢复) */
+    removeSource: (wsId: string, notebook: string, ref: string): Promise<{ removed: boolean }> =>
+      ipcRenderer.invoke("notebook:removeSource", { wsId, notebook, ref }),
+    /** 弹系统文件选择框选文档,返回绝对路径数组(取消则空) */
+    pickFiles: (): Promise<string[]> => ipcRenderer.invoke("notebook:pickFiles"),
+    /** 知识库变化(含 agent 在对话中增删来源);payload 带 wsId,消费方按所选 workspace 过滤 */
+    onChanged: (cb: (payload: NotebookChange) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: NotebookChange): void => cb(payload);
+      ipcRenderer.on("notebook:changed", listener);
+      return () => ipcRenderer.removeListener("notebook:changed", listener);
     }
   },
   evalTelemetry: {
