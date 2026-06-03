@@ -7,10 +7,15 @@ import react from "@vitejs/plugin-react";
 // 运行时直接 import .ts 会 ERR_UNKNOWN_FILE_EXTENSION。externalizeDepsPlugin 的 exclude
 // 只支持精确字符串匹配(运行时是 exclude.includes(dep)),不支持正则——所以从
 // package.json 自动派生全部 @pa/* 依赖,新增包无需再手维护此列表。
+// 注:@pa/* 列在 devDependencies(它们被 bundle 进 out/,不是运行时依赖,放 deps 会让
+// electron-builder 顺符号链接收集到 apps/desktop 之外而报错)。故这里同时扫 deps + devDeps。
 const pkg = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")) as {
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 };
-const paPackages = Object.keys(pkg.dependencies ?? {}).filter((d) => d.startsWith("@pa/"));
+const paPackages = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).filter((d) =>
+  d.startsWith("@pa/")
+);
 
 export default defineConfig({
   main: {
