@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseEvalTelemetry, summarize } from "./eval-telemetry";
+import { parseEvalTelemetry, summarize, trimToLastLines } from "./eval-telemetry";
 import type { PersistedEvalRecord } from "./eval-telemetry";
 
 const base = (over: Partial<PersistedEvalRecord>): PersistedEvalRecord => ({
@@ -79,5 +79,22 @@ describe("summarize", () => {
     ]);
     // 当前实现:总时长 2000 / 已验收 2 = 1000(缺失按 0 计入分母)——锁住这个行为,后续若改为只算有耗时的需同步改测
     expect(s.avgDurationMs).toBe(1_000);
+  });
+});
+
+describe("trimToLastLines(轮转裁剪)", () => {
+  it("行数不超过 keep → 不裁(返回 null)", () => {
+    expect(trimToLastLines("a\nb\nc\n", 3)).toBeNull();
+    expect(trimToLastLines("a\nb\n", 5)).toBeNull();
+    expect(trimToLastLines("", 10)).toBeNull();
+  });
+
+  it("超过 keep → 只留最近 keep 行,末尾带换行", () => {
+    expect(trimToLastLines("a\nb\nc\nd\ne\n", 2)).toBe("d\ne\n");
+  });
+
+  it("去掉空行后再判定与裁剪", () => {
+    // 5 个有效行 + 夹杂空行;keep=3 → 留最后 3 个有效行
+    expect(trimToLastLines("a\n\nb\n  \nc\nd\ne\n", 3)).toBe("c\nd\ne\n");
   });
 });
