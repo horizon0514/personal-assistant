@@ -3,18 +3,29 @@
  *
  * 把本地文档(PDF / 纯文本类)抽成可进上下文的文本,服务"调研→产出"主线。
  * 只读、不联网、不需 key,风险 ReadOnly(Trust 守门人自动放行)。
- * 图片 OCR、docx 留待后续。
+ *
+ * PDF 走 liteparse(Rust/PDFium,napi 预编译):比旧 pdf-parse 更快、版面更干净、
+ * 中文正常。OCR(扫描件)能力 liteparse 内置 Tesseract 但**不随包带 traineddata**
+ * (实测缺 eng.traineddata 即失败),故先关掉 OCR——扫描件仍如实回"抽不出",零回归;
+ * 要 OCR 见 README/follow-up:随包 eng/chi_sim.traineddata + 设 tessdataPath 再开 ocrEnabled。
+ * docx/xlsx 需另装 LibreOffice,不在开箱即用范围,暂不支持。
  */
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
-// pdf-parse 无随包类型;走子路径规避其 index.js 的调试代码(否则被引入时会去读测试 PDF)。
-// @ts-expect-error 子路径无声明文件
-import pdfParseUntyped from "pdf-parse/lib/pdf-parse.js";
+import { LiteParse } from "@llamaindex/liteparse";
 
-const pdfParse = pdfParseUntyped as (data: Buffer | Uint8Array) => Promise<{ text: string; numpages: number }>;
+/**
+ * 单例 LiteParse(构造时加载原生 .node;懒建,避免无 PDF 任务时白加载,也便于隔离加载失败)。
+ * outputFormat:text → 版面保留的纯文本;ocrEnabled:false → 见文件头说明。
+ */
+let liteParser: LiteParse | null = null;
+function getPdfParser(): LiteParse {
+  if (!liteParser) liteParser = new LiteParse({ outputFormat: "text", ocrEnabled: false });
+  return liteParser;
+}
 
 const CAPABILITY: Capability = "document";
 
@@ -49,12 +60,22 @@ const extractDocumentTool: AgentTool<typeof extractParams> = {
 
     if (ext === ".pdf") {
       const buf = await readFile(path);
-      const parsed = await pdfParse(buf);
+      let parsed: { text: string; pages: { length: number } };
+      try {
+        parsed = await getPdfParser().parse(buf);
+      } catch (err) {
+        // 原生加载/解析失败(不支持的平台、损坏文件等)→ 如实报错,不连累纯文本提取。
+        return textResult(`PDF 解析失败:${err instanceof Error ? err.message : String(err)}`, {
+          path,
+          kind: "pdf",
+          error: true
+        });
+      }
       const { text, truncated } = clip(parsed.text.trim());
-      return textResult(text || "(未提取到文本,可能是扫描件/图片型 PDF)", {
+      return textResult(text || "(未提取到文本,可能是扫描件/图片型 PDF;OCR 暂未启用)", {
         path,
         kind: "pdf",
-        pages: parsed.numpages,
+        pages: parsed.pages.length,
         chars: text.length,
         truncated
       });

@@ -9,6 +9,15 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - out/**
   - package.json
+  # liteparse 主包自带一份 linux 预编译产物(~20MB)作开发回退;生产真正用的是平台 optional 包
+  # (@llamaindex/liteparse-<platform>,native loader 优先 require 它)。把主包里这两份冗余二进制剔除,省体积。
+  - "!**/node_modules/@llamaindex/liteparse/liteparse.*.node"
+  - "!**/node_modules/@llamaindex/liteparse/libpdfium.*"
+
+# 原生模块解包:liteparse 的 .node(napi 插件)与 libpdfium 动态库无法从 app.asar 内 dlopen,
+# 必须解包到 app.asar.unpacked。覆盖主包 + 各平台 optional 包。
+asarUnpack:
+  - "**/node_modules/@llamaindex/liteparse*/**"
 
 directories:
   output: release/${version}

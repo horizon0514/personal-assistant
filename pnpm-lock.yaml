@@ -20,6 +20,9 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.75.4
         version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@llamaindex/liteparse':
+        specifier: ^2.0.4
+        version: 2.0.4
       '@pa/cap-browser':
         specifier: workspace:*
         version: link:../../packages/cap-browser
@@ -65,9 +68,6 @@ importers:
       lucide-react:
         specifier: ^1.16.0
         version: 1.16.0(react@18.3.1)
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.4
       react-markdown:
         specifier: ^9.0.1
         version: 9.1.0(@types/react@18.3.29)(react@18.3.1)
@@ -187,12 +187,12 @@ importers:
       '@earendil-works/pi-ai':
         specifier: ^0.75.4
         version: 0.75.4(ws@8.20.1)(zod@4.4.3)
+      '@llamaindex/liteparse':
+        specifier: ^2.0.4
+        version: 2.0.4
       '@pa/domain-core':
         specifier: workspace:*
         version: link:../domain-core
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.4
     devDependencies:
       typescript:
         specifier: ^5.6.3
@@ -790,6 +790,31 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@llamaindex/liteparse-darwin-arm64@2.0.4':
+    resolution: {integrity: sha512-FXrXXr8nXgu36dbXtjDh+SedvESodBt1dc+j8zKQvlX3/V1Cuu4RuePvCIHe+cTd1rQxx/YVUDI9EX3JMh2nyA==}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@llamaindex/liteparse-linux-arm64-gnu@2.0.4':
+    resolution: {integrity: sha512-mYUxHD5O746agBK7PVh96Fo+p+5v47qxBMBQLJpYjjT6HC3yqGPqDXXefDdiMSq80bqz6M6istgWIPNUmLOafg==}
+    cpu: [arm64]
+    os: [linux]
+
+  '@llamaindex/liteparse-linux-x64-gnu@2.0.4':
+    resolution: {integrity: sha512-Tf6oi4G8wikExWnSImj98RwXlRUY3VBWejOm0XQENMH/1B2C0frHTOaUuXCq8U3/Ms4h4eAnWpuB8wT2PDC+yw==}
+    cpu: [x64]
+    os: [linux]
+
+  '@llamaindex/liteparse-win32-x64-msvc@2.0.4':
+    resolution: {integrity: sha512-vuhJN6Odc0zF3dVGSI3dy5vWt9/+bN2yi26ZYmXlTrKtZYNuSx06tDXZvZBG/4AQGI6m6E82KsCnRGRAc91V6Q==}
+    cpu: [x64]
+    os: [win32]
+
+  '@llamaindex/liteparse@2.0.4':
+    resolution: {integrity: sha512-wXI+GrYRb7jTPDBxst6RcvK6AI4UXqQP+7RvNhmB9yZERlIz6c1fRdCrlvkHEpMKj850LxgzAcawVMT+UiQwlw==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
 
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg==}
@@ -1501,6 +1526,10 @@ packages:
 
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
+
+  commander@12.1.0:
+    resolution: {integrity: sha512-Vw8qHK3bZM9y/P10u3Vib8o/DdkvA2OtPtZvD871QKjy74Wj1WSKFILMPRPSdUSx5RFK1arlJzEtA4PkFgnbuA==}
+    engines: {node: '>=18'}
 
   commander@4.1.1:
     resolution: {integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==}
@@ -2542,9 +2571,6 @@ packages:
     engines: {node: '>=10.5.0'}
     deprecated: Use your platform's native DOMException instead
 
-  node-ensure@0.0.0:
-    resolution: {integrity: sha512-DRI60hzo2oKN1ma0ckc6nQWlHU69RH6xN0sjQTjMpChPfTYvKZdcQFfdYK2RWbJcKyUizSIy/l8OTGxMAM1QDw==}
-
   node-fetch@3.3.2:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
@@ -2661,10 +2687,6 @@ packages:
   pathval@2.0.1:
     resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
     engines: {node: '>= 14.16'}
-
-  pdf-parse@1.1.4:
-    resolution: {integrity: sha512-XRIRcLgk6ZnUbsHsYXExMw+krrPE81hJ6FQPLdBNhhBefqIQKXu/WeTgNBGSwPrfU0v+UCEwn7AoAUOsVKHFvQ==}
-    engines: {node: '>=6.8.1'}
 
   pe-library@0.4.1:
     resolution: {integrity: sha512-eRWB5LBz7PpDu4PUlwT0PhnQfTQJlDDdPa35urV4Osrm0t0AqQFGn+UIkU3klZvwJ8KPO3VbBFsXquA6p6kqZw==}
@@ -3973,6 +3995,27 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@llamaindex/liteparse-darwin-arm64@2.0.4':
+    optional: true
+
+  '@llamaindex/liteparse-linux-arm64-gnu@2.0.4':
+    optional: true
+
+  '@llamaindex/liteparse-linux-x64-gnu@2.0.4':
+    optional: true
+
+  '@llamaindex/liteparse-win32-x64-msvc@2.0.4':
+    optional: true
+
+  '@llamaindex/liteparse@2.0.4':
+    dependencies:
+      commander: 12.1.0
+    optionalDependencies:
+      '@llamaindex/liteparse-darwin-arm64': 2.0.4
+      '@llamaindex/liteparse-linux-arm64-gnu': 2.0.4
+      '@llamaindex/liteparse-linux-x64-gnu': 2.0.4
+      '@llamaindex/liteparse-win32-x64-msvc': 2.0.4
+
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
       cross-spawn: 7.0.6
@@ -4747,6 +4790,8 @@ snapshots:
       delayed-stream: 1.0.0
 
   comma-separated-tokens@2.0.3: {}
+
+  commander@12.1.0: {}
 
   commander@4.1.1: {}
 
@@ -6112,8 +6157,6 @@ snapshots:
 
   node-domexception@1.0.0: {}
 
-  node-ensure@0.0.0: {}
-
   node-fetch@3.3.2:
     dependencies:
       data-uri-to-buffer: 4.0.1
@@ -6231,10 +6274,6 @@ snapshots:
   pathe@1.1.2: {}
 
   pathval@2.0.1: {}
-
-  pdf-parse@1.1.4:
-    dependencies:
-      node-ensure: 0.0.0
 
   pe-library@0.4.1: {}
 

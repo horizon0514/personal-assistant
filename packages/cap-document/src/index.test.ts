@@ -1,8 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { documentTools, documentToolNames, documentToolRisk } from "./index";
+
+const FIXTURES = join(fileURLToPath(new URL(".", import.meta.url)), "__fixtures__");
 
 const tool = documentTools.find((t) => t.name === "extract_document")!;
 let dir: string;
@@ -37,5 +40,15 @@ describe("extract_document", () => {
     const res = await run(p);
     expect(res.details).toMatchObject({ kind: "unsupported" });
     expect((res.content[0] as { text: string }).text).toContain("不支持");
+  });
+
+  it("数字版 PDF 经 liteparse 抽出文本(含中文、版面)", async () => {
+    const res = await run(join(FIXTURES, "digital-text.pdf"));
+    const text = (res.content[0] as { text: string }).text;
+    expect(res.details).toMatchObject({ kind: "pdf" });
+    expect((res.details as { pages: number }).pages).toBeGreaterThanOrEqual(1);
+    expect(text).toContain("LiteParse"); // 英文
+    expect(text).toContain("中文一行测试"); // 中文不乱码
+    expect(text).toContain("12345"); // 数字/符号
   });
 });
