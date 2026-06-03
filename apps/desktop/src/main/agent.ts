@@ -39,7 +39,7 @@ import {
   filesystemToolRisk,
   type FileChangeOp
 } from "@pa/cap-filesystem";
-import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
+import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
@@ -359,7 +359,12 @@ function buildAdapter(
       alwaysOn: true,
       tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
     },
-    { capability: "document", alwaysOn: true, tools: [...documentTools] },
+    {
+      // 扫描件按需 OCR 的语言包缓存放 <userData>/tessdata(首个扫描件触发下载,之后复用,不随 app 包)。
+      capability: "document",
+      alwaysOn: true,
+      tools: createDocumentTools({ ocrTessdataDir: join(app.getPath("userData"), "tessdata") })
+    },
     {
       capability: "memory",
       alwaysOn: true,
