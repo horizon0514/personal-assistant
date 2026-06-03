@@ -89,6 +89,28 @@ describe("SessionStore", () => {
     expect(new SessionStore(wsDir).recentWithDigest(4).map((r) => r.id)).toEqual([b.id, a.id]);
   });
 
+  it("setBoundNotebook 持久化、可解绑、不重排会话;重启保留", () => {
+    const wsDir = join(root, "ws-bind");
+    const s = new SessionStore(wsDir);
+    const a = s.create("旧");
+    const b = s.create("新");
+    const bUpdatedAt = s.list().find((x) => x.id === b.id)!.updatedAt;
+
+    s.setBoundNotebook(a.id, "  项目X调研  "); // 前后空白会被 trim
+    expect(s.get(a.id)!.boundNotebook).toBe("项目X调研");
+
+    // 不碰 updatedAt:绑定是配置而非活动,b 仍排在 a 前
+    expect(s.list().find((x) => x.id === b.id)!.updatedAt).toBe(bUpdatedAt);
+
+    // 重启后保留
+    expect(new SessionStore(wsDir).get(a.id)!.boundNotebook).toBe("项目X调研");
+
+    // 空字符串=解绑(字段删除)
+    s.setBoundNotebook(a.id, "");
+    expect(s.get(a.id)!.boundNotebook).toBeUndefined();
+    expect(new SessionStore(wsDir).get(a.id)!.boundNotebook).toBeUndefined();
+  });
+
   it("needingDigest:未处理/处理后又更新的会补跑;markDigested 后不再补;重启保留", () => {
     const wsDir = join(root, "ws-catchup");
     const s = new SessionStore(wsDir);
