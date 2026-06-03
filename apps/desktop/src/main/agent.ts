@@ -163,13 +163,6 @@ const SHELL_KEYWORDS =
   /shell|终端|命令行|命令|执行|运行|跑一下|git |npm |pnpm |yarn |node |python |bash |zsh |chmod|chown|mkdir|rm |cp |mv |ls |cat |grep |find |du |df |ps |kill|brew |curl |wget |tar |zip |unzip|docker |kubectl|ssh |scp/i;
 
 /**
- * 启用 schedule(定时任务)工具组的关键词:涵盖"设新任务"与"管理已有"两类自然语言。
- * 后续轮靠 recent 兜底(上一轮用过 schedule,接着"改到8点/删掉它"仍带着工具)。
- */
-const SCHEDULE_KEYWORDS =
-  /定时|定期|每天|每日|每周|每月|每隔|工作日|周[一二三四五六日天]|提醒我|到点|按时|准时|闹钟|routine|schedule|cron|\d+\s*点|早上|上午|中午|下午|傍晚|晚上|凌晨|几点/i;
-
-/**
  * 注入 system prompt 的能力分区描述。**字节冻结**:同一份描述跨 session/天/adapter 重建必须逐字节相同。
  * 不逐工具枚举——实际工具集每轮由 API tools 参数承载。
  */
@@ -390,11 +383,12 @@ function buildAdapter(
       guideline: shellGuidelines
     },
     {
+      // 管定时任务是私人助理的核心职责,且关键词门控对续接指令太脆 —— 用户先「每天10点提醒喝水」(命中),
+      // 之后「改一下之前的任务」(不含时间词)就漏挂 schedule,模型手上没工具便去手搓系统 crontab(脱离面板、
+      // 用户改/删不了,还会卡死)。故 alwaysOn,其 guideline 进冻结 prompt,与 browser 同理。
       capability: "schedule",
-      alwaysOn: false,
-      matches: (text) => SCHEDULE_KEYWORDS.test(text), // 设新任务/管理已有,后续轮靠 recent 兜底
-      tools: scheduleTools,
-      guideline: scheduleGuidelines
+      alwaysOn: true,
+      tools: scheduleTools
     }
   ];
   // 不属于具体 capability、但总是要暴露的工具(propose_plan 是任务编排级,跟具体能力域无关)。
@@ -455,9 +449,9 @@ function buildAdapter(
     writeTrace: (text) => getSessions(wsId).writeTrace(sessionId, text),
     systemPrompt: buildSystemPrompt({
       capabilities: CAPABILITY_DESCRIPTIONS,
-      // 只放 always-on 能力的 guideline(每轮都在,留冻结=零缓存损失)。browser 现为 always-on,故其指南也在此。
-      // 仍 gated 的能力(shell/schedule)的 guideline 挂在 catalog 上,随 selectTools 经 contextProvider 按轮注入。
-      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines, browserGuidelines]
+      // 只放 always-on 能力的 guideline(每轮都在,留冻结=零缓存损失)。browser/schedule 均为 always-on,故其指南也在此。
+      // 仍 gated 的能力(仅 shell)的 guideline 挂在 catalog 上,随 selectTools 经 contextProvider 按轮注入。
+      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines, browserGuidelines, scheduleGuidelines]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
