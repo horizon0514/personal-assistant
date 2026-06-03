@@ -361,20 +361,20 @@ function buildAdapter(
   const memory = getMemory(wsId);
   const model = createModel({ provider: PROVIDER, modelId: MODEL, forceVision: FORCE_VISION });
   const modelHasVision = model.input.includes("image");
-  // 模型不收图时不暴露 browser_screenshot——否则截图只会被降级成占位文字,纯误导模型。
-  const activeBrowserTools = modelHasVision
-    ? browserTools
-    : browserTools.filter((t) => t.name !== "browser_screenshot");
-  // 同理:view_document_pages(PDF 页→图)只有模型能读图时才暴露,否则图会被降级丢弃、纯误导。
-  const documentToolsAll = createDocumentTools({
-    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
-    onProgress: (actionId, note) => {
-      if (!background) sendTo("step:progress", { actionId, note });
-    }
-  });
-  const activeDocumentTools = modelHasVision
-    ? documentToolsAll
-    : documentToolsAll.filter((t) => t.name !== "view_document_pages");
+  // 视觉工具(browser_screenshot / view_document_pages)只在模型能读图时暴露——否则图会被降级成
+  // 占位文字、纯误导模型。模型不收图就把指定工具滤掉。
+  const dropIfNoVision = (tools: AgentTool[], name: string): AgentTool[] =>
+    modelHasVision ? tools : tools.filter((t) => t.name !== name);
+  const activeBrowserTools = dropIfNoVision(browserTools, "browser_screenshot");
+  const activeDocumentTools = dropIfNoVision(
+    createDocumentTools({
+      ocrModelDir: join(app.getPath("userData"), "paddleocr"),
+      onProgress: (actionId, note) => {
+        if (!background) sendTo("step:progress", { actionId, note });
+      }
+    }),
+    "view_document_pages"
+  );
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -384,8 +384,7 @@ function buildAdapter(
       tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
     },
     {
-      // 扫描件按需 OCR 的语言包缓存放 <userData>/tessdata;view_document_pages 仅视觉模型可见。
-      // (工具集在上面装配:含 onProgress 进度上报 + 按 modelHasVision 过滤视觉工具)
+      // 工具集在上面装配:含 PaddleOCR 模型缓存目录 + onProgress 进度上报 + 按 modelHasVision 过滤视觉工具。
       capability: "document",
       alwaysOn: true,
       tools: activeDocumentTools

@@ -72,18 +72,14 @@ function toArrayBuffer(b: Buffer): ArrayBuffer {
   return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 }
 
-// ── LiteParse 实例(构造时加载原生 .node;懒建,隔离加载失败)─────────────
-let digitalParser: LiteParse | null = null;
-function getDigitalParser(): LiteParse {
-  if (!digitalParser) digitalParser = new LiteParse({ outputFormat: "text", ocrEnabled: false });
-  return digitalParser;
+/** 懒单例:首用时构造,之后复用(LiteParse 构造会加载原生 .node,懒建避免无谓加载 + 隔离失败)。 */
+function lazy<T>(make: () => T): () => T {
+  let v: T | null = null;
+  return () => (v ??= make());
 }
-// 页面渲染成图:OCR(喂 PaddleOCR)与 view_document_pages(喂视觉模型)共用。
-let renderParser: LiteParse | null = null;
-function getRenderParser(): LiteParse {
-  if (!renderParser) renderParser = new LiteParse({ dpi: OCR_RENDER_DPI });
-  return renderParser;
-}
+// 数字版抽取(ocrEnabled:false,快);页面渲染成图(OCR 喂 PaddleOCR / view_document_pages 喂视觉模型,共用)。
+const getDigitalParser = lazy(() => new LiteParse({ outputFormat: "text", ocrEnabled: false }));
+const getRenderParser = lazy(() => new LiteParse({ dpi: OCR_RENDER_DPI }));
 
 // ── PaddleOCR 模型按需下载 + 服务单例 ─────────────────────────────
 // 并发去重(同一文件不重复下),写临时文件再 rename(防半成品被当成可用)。
