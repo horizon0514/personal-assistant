@@ -64,10 +64,10 @@ Notebook 像 `ctx-memory`:**本地、可见可恢复、每 workspace 一份**的
 
 | 切片 | 内容 | 价值 | 状态 |
 |------|------|------|------|
-| **M0 接地抽取** | `cap-document` 加结构化抽取(保逐页 `PageText[]`),导出可复用的 `extractDocument()`;agent 的 `extract_document` 扁平输出对多页 PDF 加「第 N 页」锚 | 地基;小而可测 | ← 本轮 |
-| **M1 Notebook 领域+持久化** | `ctx-notebook` 包:manifest + 逐页文本缓存 + add/list/remove;每 workspace 一份 | 语料从此"被记住" | |
-| **M2 范围问答+引用** | `notebook_search/read` + 接地约束 prompt + evaluator 验收清单 | **核心体验成形**(现有聊天框即可端到端跑) | |
-| **M3 UI** | Notebook 视图:来源列表 + 问答区 + 引用跳回原文(复用三栏 + ArtifactPanel) | NotebookLM 的"样子" | |
+| **M0 接地抽取** | `cap-document` 加结构化抽取(保逐页 `PageText[]`),导出可复用的 `extractDocument()`;agent 的 `extract_document` 扁平输出对多页 PDF 加「第 N 页」锚 | 地基;小而可测 | ✅ 已落地 |
+| **M1 Notebook 领域+持久化** | `ctx-notebook` 包:manifest + 逐页文本缓存 + add/list/remove;每 workspace 一份 | 语料从此"被记住" | ✅ 已落地 |
+| **M2 范围问答+引用** | `notebook_search/read` + 接地约束 prompt + evaluator 可独立核查引用 | **核心体验成形**(现有聊天框即可端到端跑) | ✅ 已落地 |
+| **M3 UI** | Notebook 视图:来源列表 + 问答区 + 引用跳回原文(复用三栏 + ArtifactPanel) | NotebookLM 的"样子" | ← 下一步 |
 | **M4(以后/可选)** | 关键词搜不动、需语义相似时再上 embedding | 严守"按需再做" | |
 
 M0+M1+M2 即可在**现有聊天框**端到端跑通"对一组资料带引用问答";M3 才做成独立界面。

@@ -90,6 +90,35 @@ describe("NotebookStore", () => {
     expect(s.findActiveSourceByPath("库", "/d/a.pdf")).toBeDefined();
     expect(s.findActiveSourceByPath("库", "/d/other.pdf")).toBeUndefined();
   });
+
+  it("search:逐页命中,回页码 + 片段 + 命中数;软删的来源不参与", () => {
+    const s = new NotebookStore(dir);
+    s.addSource("库", { path: "/d/a.pdf", name: "a.pdf", kind: "pdf", ocr: false, pageCount: 2, pages: PDF.pages });
+    s.addSource("库", { path: "/d/b.pdf", name: "b.pdf", kind: "pdf", ocr: false, pageCount: 1, pages: [{ page: 1, text: "预算预算又见预算" }] });
+
+    const hits = s.search("库", "预算");
+    // a.pdf 第1页 + b.pdf 第1页
+    expect(hits).toHaveLength(2);
+    const b = hits.find((h) => h.sourceName === "b.pdf")!;
+    expect(b.page).toBe(1);
+    expect(b.matchCount).toBe(3);
+    expect(b.snippet).toContain("预算");
+
+    // 大小写不敏感
+    expect(s.search("库", "讲明细")).toHaveLength(1);
+
+    // 软删后不再命中
+    s.removeSource("库", "b.pdf");
+    expect(s.search("库", "预算")).toHaveLength(1);
+  });
+
+  it("getSource 取回逐页全文(供 read)", () => {
+    const s = new NotebookStore(dir);
+    s.addSource("库", { path: "/d/a.pdf", name: "a.pdf", kind: "pdf", ocr: false, pageCount: 2, pages: PDF.pages });
+    const src = s.getSource("库", "a.pdf");
+    expect(src?.pages).toHaveLength(2);
+    expect(s.getSource("库", "不存在")).toBeUndefined();
+  });
 });
 
 async function call(tool: AgentToolLike, args: Record<string, unknown>) {
@@ -102,7 +131,41 @@ interface AgentToolLike {
 
 describe("createNotebookTools", () => {
   it("工具名齐全(供组合根登记)", () => {
-    expect([...notebookToolNames].sort()).toEqual(["notebook_add_source", "notebook_list", "notebook_remove_source"]);
+    expect([...notebookToolNames].sort()).toEqual([
+      "notebook_add_source",
+      "notebook_list",
+      "notebook_read_source",
+      "notebook_remove_source",
+      "notebook_search"
+    ]);
+  });
+
+  it("search → read_source:定位后读全页(支持页码范围)", async () => {
+    const s = new NotebookStore(dir);
+    const extract = fakeExtractor({ "/docs/budget.pdf": PDF });
+    const tools = createNotebookTools(s, extract) as unknown as AgentToolLike[];
+    const add = tools.find((t) => t.name === "notebook_add_source")!;
+    const search = tools.find((t) => t.name === "notebook_search")!;
+    const read = tools.find((t) => t.name === "notebook_read_source")!;
+
+    await call(add, { notebook: "预算库", path: "/docs/budget.pdf" });
+
+    const found = await call(search, { notebook: "预算库", query: "明细" });
+    expect((found.content[0] as { text: string }).text).toContain("第 2 页");
+    expect(found.details).toMatchObject({ count: 1 });
+
+    // 读指定页:带「第 N 页」锚,只含选中页
+    const r = await call(read, { notebook: "预算库", source: "budget", pages: "2" });
+    const text = (r.content[0] as { text: string }).text;
+    expect(text).toContain("【第 2 页】");
+    expect(text).toContain("第二页讲明细");
+    expect(text).not.toContain("第一页讲预算");
+    expect(r.details).toMatchObject({ found: true, pages: 1 });
+
+    // 搜不到给出明确说明(不编造)
+    const miss = await call(search, { notebook: "预算库", query: "火星基地" });
+    expect((miss.content[0] as { text: string }).text).toContain("没找到");
+    expect(miss.details).toMatchObject({ count: 0 });
   });
 
   it("add → list → remove 走通,且重复添加不重抽取", async () => {

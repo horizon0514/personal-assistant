@@ -106,6 +106,9 @@ const EVALUATOR_TOOLS = new Set([
   "find_files",
   "grep_files",
   "extract_document",
+  "notebook_list",
+  "notebook_search",
+  "notebook_read_source",
   "read_current_page"
 ]);
 

@@ -106,7 +106,8 @@
 
 - [x] **M0 接地抽取**:`cap-document` 加结构化抽取,导出可复用 `extractDocument()`(保逐页 `PageText[]`,数字版用 `pages[].text`、扫描件逐页 OCR);`extract_document` 扁平输出对多页 PDF 加「第 N 页」锚 → 引用接地的地基。(2026-06-03)
 - [x] **M1 Notebook 领域+持久化**:新 `packages/ctx-notebook`(领域类型 + `NotebookStore` + 三工具),每 workspace 一个 `notebooks/<id>.json`(逐页文本缓存,抽过即存、免重跑 OCR);`notebook_add_source`(抽取器由组合根注入,与 cap-document 解耦;同 path 不重抽)/`notebook_list`(列库或列来源)/`notebook_remove_source`(软删留痕)。domain-core 加 `notebook` 能力、infra 加 `notebooksDir`、agent.ts 接线(catalog alwaysOn + 视同 ReadOnly + guideline)。8 单测。(2026-06-03)
-- [ ] **M2 范围问答+引用**:`notebook_search`(缓存文本关键词检索,回 `来源:页:片段`)+ `notebook_read_source`;接地约束进 `notebookGuidelines`(只基于来源、每论断标 `[来源, p.X]`、找不到就说找不到);独立 evaluator 加"每论断须有来源支撑"验收。**现有聊天框即可端到端**。
+- [x] **M2 范围问答+引用**:`notebook_search`(库内逐页关键词检索,回 `《来源》第 N 页:片段` + 命中数)+ `notebook_read_source`(读全文/指定页范围「3」「2-5」「1,4,7」,带「第 N 页」锚、超 20 万字截断);接地约束进 `notebookGuidelines`(只基于来源、先 search 再 read、每论断标页码、搜不到直说不编造)。两工具加进 EVALUATOR_TOOLS(验收器可独立核查引用)。11 单测。**现有聊天框即可端到端带引用问答**。(2026-06-03)
+  - 收边界说明:未往**共享** evaluator prompt 硬塞 notebook 专属验收(那会污染所有任务);现有验收门 = `hadPlan || sawMutation`,故"有交付物/签了契约"的知识库产出任务,其契约验收清单天然含接地要求、且验收器已有 notebook 读工具可独立核查;纯只读闲聊式问答则靠 guideline 自我接地。这已覆盖设计稿意图,无需额外门控。
 - [ ] **M3 UI**:Notebook 视图(来源列表 + 问答区 + 引用跳回原文),复用三栏 + ArtifactPanel。
 - [ ] **M4(以后/可选)**:关键词搜不动、需语义相似时再上 embedding —— 严守"按需再做"。
 

@@ -97,6 +97,30 @@ export interface NotebookView {
   updatedAt: number;
 }
 
+/** 库内检索命中:定位到 来源 + 页 + 片段。 */
+export interface SearchHit {
+  sourceId: string;
+  sourceName: string;
+  page: number;
+  /** 命中处上下文片段(已压平换行)。 */
+  snippet: string;
+  /** 该页命中次数。 */
+  matchCount: number;
+}
+
+/** 提取文本上限(读全文时;与 cap-filesystem / cap-document 对齐)。 */
+const MAX_READ_CHARS = 200_000;
+/** 检索片段单侧上下文字数。 */
+const SNIPPET_PAD = 80;
+
+/** 命中处上下文片段:首个匹配位置前后各取 SNIPPET_PAD 字,压平换行、加省略号。 */
+function snippet(text: string, idx: number, qlen: number): string {
+  const start = Math.max(0, idx - SNIPPET_PAD);
+  const end = Math.min(text.length, idx + qlen + SNIPPET_PAD);
+  const body = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${body}${end < text.length ? "…" : ""}`;
+}
+
 function toSourceView(s: Source): SourceView {
   return {
     id: s.id,
@@ -208,6 +232,16 @@ export class NotebookStore {
     return { notebook: nb, source };
   }
 
+  /** 在 notebook 内按 ref(id / 展示名 / 路径子串,大小写不敏感)定位一份活跃来源。 */
+  private matchSource(nb: Notebook, ref: string): Source | undefined {
+    const r = ref.trim().toLowerCase();
+    return nb.sources.find(
+      (s) =>
+        s.status === "active" &&
+        (s.id === ref || s.name.toLowerCase() === r || s.name.toLowerCase().includes(r) || s.path.toLowerCase().includes(r))
+    );
+  }
+
   /**
    * 软删一份来源(留痕,可恢复;原文件从不触碰,只是停止追踪)。
    * ref 可为 source id、展示名或路径(子串,大小写不敏感)。
@@ -215,18 +249,45 @@ export class NotebookStore {
   removeSource(notebookName: string, ref: string, reason?: string): Source | undefined {
     const nb = this.findByName(notebookName);
     if (!nb) return undefined;
-    const r = ref.trim().toLowerCase();
-    const source = nb.sources.find(
-      (s) =>
-        s.status === "active" &&
-        (s.id === ref || s.name.toLowerCase() === r || s.name.toLowerCase().includes(r) || s.path.toLowerCase().includes(r))
-    );
+    const source = this.matchSource(nb, ref);
     if (!source) return undefined;
     source.status = "removed";
     source.removedReason = reason;
     nb.updatedAt = Date.now();
     this.persist(nb);
     return source;
+  }
+
+  /**
+   * 库内关键词检索(agentic search,非向量):逐页大小写不敏感子串匹配,
+   * 每个命中页回一条带页码的片段。供模型定位后再 getSource 读全页、带页码引用作答。
+   * @param limit 命中上限(防一个高频词刷屏)。
+   */
+  search(notebookName: string, query: string, limit = 20): SearchHit[] {
+    const nb = this.findByName(notebookName);
+    if (!nb) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const hits: SearchHit[] = [];
+    for (const s of nb.sources) {
+      if (s.status !== "active") continue;
+      for (const p of s.pages) {
+        const hay = p.text.toLowerCase();
+        const first = hay.indexOf(q);
+        if (first === -1) continue;
+        let count = 0;
+        for (let k = first; k !== -1; k = hay.indexOf(q, k + q.length)) count++;
+        hits.push({ sourceId: s.id, sourceName: s.name, page: p.page, snippet: snippet(p.text, first, q.length), matchCount: count });
+        if (hits.length >= limit) return hits;
+      }
+    }
+    return hits;
+  }
+
+  /** 取一份来源(含逐页全文),供 notebook_read_source 读全文/指定页。 */
+  getSource(notebookName: string, ref: string): Source | undefined {
+    const nb = this.findByName(notebookName);
+    return nb ? this.matchSource(nb, ref) : undefined;
   }
 
   /** 全部 notebook 视图(UI 列表 / 概览)。 */
@@ -246,16 +307,26 @@ export class NotebookStore {
 export const notebookToolNames: ReadonlySet<string> = new Set([
   "notebook_add_source",
   "notebook_list",
+  "notebook_search",
+  "notebook_read_source",
   "notebook_remove_source"
 ]);
 
 export const notebookGuidelines = `## 知识库(Notebook / 来源集)
-- 当用户想「把这几份资料攒起来反复问 / 基于这批文档做问答或产出」时,用 notebook 把它们收进一个**来源集**,而不是每次重新 extract。
+当用户想「把这几份资料攒起来反复问 / 基于这批文档做问答或产出」时,用 notebook 把它们收进一个**来源集**,而不是每次重新 extract。
+
+**管理来源**
 - **notebook_add_source**:把一份 PDF/文本加进指定知识库(按名,不存在则自动新建)。入库会抽取并缓存逐页文本——之后问它无需重抽、扫描件也不必重跑 OCR。一次加一份;多份就多次调用。
-- **notebook_list**:不带参数列出所有知识库及其来源数;带 notebook 名则列出该库内的来源清单(含页数/字数/是否扫描件)。动手问答前先看看库里有什么。
+- **notebook_list**:不带参数列出所有知识库及其来源数;带 notebook 名则列出该库内来源清单。动手问答前先看看库里有什么。
 - **notebook_remove_source**:把某份来源移出知识库(软删除,原文件不动,可恢复)。
-- 加资料是用户的明确动作,别自作主张把无关文件塞进知识库;拿不准放哪个库就先 notebook_list 看看或问用户。
-- (基于知识库内容的检索/带引用问答会在后续版本提供;当前先把"攒资料、看清单"做扎实。)`;
+- 加资料是用户的明确动作,别自作主张把无关文件塞进知识库;拿不准放哪个库就先 notebook_list 或问用户。
+
+**基于知识库问答(核心:接地、带引用、不编造)**
+- 回答关于某知识库的问题时,**只依据该库里的来源**,不要用你的先验知识补全或想当然。
+- 流程:先 **notebook_search** 用关键词在库内定位(回「来源:第 N 页」+ 片段)→ 再 **notebook_read_source** 把命中来源的相应页读全 → 据原文作答。一个关键词搜不到就换词多搜几轮,别急着说没有。
+- **每个论断都标出处**,形如「据《xx.pdf》第 3 页…」或句末 \`[xx.pdf, p.3]\`,让用户能回原文核对。
+- 库里**确实没有**相关内容时,直说「这批资料里没有提到 X」,并说明你搜了哪些词——**不要**用通用知识硬答。
+- 跨多份来源时,分别标清每条结论来自哪份、哪页;有冲突就如实指出。`;
 
 const addParams = Type.Object({
   notebook: Type.String({ description: "知识库名称(不存在则自动新建,如「2024报销」「项目X调研」)" }),
@@ -265,6 +336,44 @@ const addParams = Type.Object({
 const listParams = Type.Object({
   notebook: Type.Optional(
     Type.String({ description: "可选:某个知识库名。不填=列出所有知识库;填了=列出该库内的来源清单" })
+  )
+});
+
+/** 解析页码选择串(「3」「2-5」「1,4,7」)→ 页码集合;空/无效返回 null(=全选)。 */
+function parsePageSpec(spec: string | undefined): Set<number> | null {
+  if (!spec || !spec.trim()) return null;
+  const set = new Set<number>();
+  for (const part of spec.split(",")) {
+    const seg = part.trim();
+    const range = /^(\d+)\s*-\s*(\d+)$/.exec(seg);
+    if (range) {
+      const lo = Number(range[1]);
+      const hi = Number(range[2]);
+      for (let p = Math.min(lo, hi); p <= Math.max(lo, hi); p++) set.add(p);
+    } else if (/^\d+$/.test(seg)) {
+      set.add(Number(seg));
+    }
+  }
+  return set.size > 0 ? set : null;
+}
+
+/** 把逐页拼成带「第 N 页」锚的文本,超 MAX_READ_CHARS 截断。 */
+function renderPages(pages: PageText[]): { text: string; truncated: boolean } {
+  const body = pages.map((p) => `【第 ${p.page} 页】\n${p.text}`).join("\n\n");
+  if (body.length <= MAX_READ_CHARS) return { text: body, truncated: false };
+  return { text: body.slice(0, MAX_READ_CHARS) + "\n…(内容过长已截断)", truncated: true };
+}
+
+const searchParams = Type.Object({
+  notebook: Type.String({ description: "要检索的知识库名称" }),
+  query: Type.String({ description: "关键词(库内逐页大小写不敏感子串匹配)。搜不到就换词多试几轮" })
+});
+
+const readParams = Type.Object({
+  notebook: Type.String({ description: "知识库名称" }),
+  source: Type.String({ description: "要读的来源:其展示名、文件名片段或路径片段" }),
+  pages: Type.Optional(
+    Type.String({ description: "可选:页码范围,如「3」「2-5」「1,4,7」。不填=读全文(超长会截断)" })
   )
 });
 
@@ -368,6 +477,63 @@ export function createNotebookTools(
     }
   };
 
+  const search: AgentTool<typeof searchParams> = {
+    name: "notebook_search",
+    label: "搜知识库",
+    description:
+      "在指定知识库内按关键词检索,返回命中的「来源 : 第 N 页 : 片段」。" +
+      "基于知识库问答时先用它定位,再用 notebook_read_source 读全页、据原文带页码作答。",
+    parameters: searchParams,
+    execute: async (_id, { notebook, query }) => {
+      if (!store.getNotebook(notebook)) {
+        return { content: [{ type: "text", text: `没有名为「${notebook}」的知识库。` }], details: { found: false } };
+      }
+      const hits = store.search(notebook, query);
+      if (hits.length === 0) {
+        return {
+          content: [{ type: "text", text: `在知识库「${notebook}」里没找到匹配「${query}」的内容。可换个说法/关键词再搜。` }],
+          details: { count: 0 }
+        };
+      }
+      const lines = hits.map((h) => `- 《${h.sourceName}》第 ${h.page} 页${h.matchCount > 1 ? `(${h.matchCount} 处)` : ""}:${h.snippet}`);
+      return {
+        content: [{ type: "text", text: `在「${notebook}」中命中「${query}」:\n${lines.join("\n")}` }],
+        details: { count: hits.length }
+      };
+    }
+  };
+
+  const readSource: AgentTool<typeof readParams> = {
+    name: "notebook_read_source",
+    label: "读知识库来源",
+    description:
+      "读知识库里某份来源的全文或指定页(带「第 N 页」锚)。" +
+      "用于 notebook_search 定位后把相关页读全,据原文作答并引用页码。",
+    parameters: readParams,
+    execute: async (_id, { notebook, source, pages }) => {
+      const src = store.getSource(notebook, source);
+      if (!src) {
+        return {
+          content: [{ type: "text", text: `在知识库「${notebook}」里没找到匹配「${source}」的来源。` }],
+          details: { found: false }
+        };
+      }
+      const sel = parsePageSpec(pages);
+      const chosen = sel ? src.pages.filter((p) => sel.has(p.page)) : src.pages;
+      if (chosen.length === 0) {
+        return {
+          content: [{ type: "text", text: `《${src.name}》没有匹配「${pages}」的页(共 ${src.pageCount} 页)。` }],
+          details: { found: true, pages: 0 }
+        };
+      }
+      const { text, truncated } = renderPages(chosen);
+      return {
+        content: [{ type: "text", text: `《${src.name}》${sel ? `(第 ${pages} 页)` : ""}:\n${text}` }],
+        details: { found: true, pages: chosen.length, truncated }
+      };
+    }
+  };
+
   const removeSource: AgentTool<typeof removeParams> = {
     name: "notebook_remove_source",
     label: "移出知识库",
@@ -383,5 +549,5 @@ export function createNotebookTools(
     }
   };
 
-  return [addSource, listSources, removeSource];
+  return [addSource, listSources, search, readSource, removeSource];
 }
