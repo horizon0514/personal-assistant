@@ -224,31 +224,94 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
   };
 }
 
+// ── 视觉读图:把 PDF 页渲染成图片,直接给「能读图的」模型看 ─────────────
+// 扫描件/复杂表格/公章 OCR 抽不准时,让视觉模型直接看页面图,远比 OCR 文本可靠。
+// 仅当模型支持图片输入时由组合根暴露本工具(否则图会被降级丢弃,纯误导)。
+const MAX_VISION_PAGES = 8;
+let screenshotParser: LiteParse | null = null;
+function getScreenshotParser(): LiteParse {
+  if (!screenshotParser) screenshotParser = new LiteParse({ dpi: 200 });
+  return screenshotParser;
+}
+/** 解析页码串("3"/"2-4"/"1,3,5")→ 去重升序、上限 MAX_VISION_PAGES;空 → 前 5 页。 */
+function parsePageSpec(spec: string | undefined): number[] {
+  const out = new Set<number>();
+  if (spec) {
+    for (const part of spec.split(/[,，]/)) {
+      const m = part.trim().match(/^(\d+)\s*[-~]\s*(\d+)$/);
+      if (m) for (let i = +m[1]!; i <= +m[2]!; i++) out.add(i);
+      else {
+        const n = Number.parseInt(part.trim(), 10);
+        if (n > 0) out.add(n);
+      }
+    }
+  }
+  const nums = out.size ? [...out] : [1, 2, 3, 4, 5];
+  return nums.sort((a, b) => a - b).slice(0, MAX_VISION_PAGES);
+}
+
+const viewPagesParams = Type.Object({
+  path: Type.String({ description: "PDF 的绝对路径。" }),
+  pages: Type.Optional(Type.String({ description: '要看的页码,如 "3" / "2-4" / "1,3,5";省略=前几页。' }))
+});
+
+const viewDocumentTool: AgentTool<typeof viewPagesParams> = {
+  name: "view_document_pages",
+  label: "看文档页面",
+  description:
+    "把 PDF 的指定页渲染成图片直接给你看。扫描件、复杂表格、公章、手写等 extract_document 的 OCR 抽不准的内容," +
+    "用它直接看页面图,比 OCR 文本可靠得多。",
+  parameters: viewPagesParams,
+  execute: async (_id, { path, pages }) => {
+    if (extname(path).toLowerCase() !== ".pdf") {
+      return textResult("view_document_pages 目前只支持 PDF。", { path, kind: "unsupported" });
+    }
+    let shots: { pageNum: number; imageBuffer: Buffer }[];
+    try {
+      shots = await getScreenshotParser().screenshot(await readFile(path), parsePageSpec(pages));
+    } catch (err) {
+      return textResult(`渲染页面失败:${err instanceof Error ? err.message : String(err)}`, { path, error: true });
+    }
+    if (shots.length === 0) return textResult("没渲染出页面(页码可能超出范围)。", { path, kind: "pdf" });
+    return {
+      content: [
+        {
+          type: "text",
+          text: `已渲染第 ${shots.map((s) => s.pageNum).join("、")} 页为图片,请直接看图读取内容(表格按行列对齐逐格读)。`
+        },
+        ...shots.map((s) => ({ type: "image" as const, data: s.imageBuffer.toString("base64"), mimeType: "image/png" }))
+      ],
+      details: { path, kind: "pdf-image", pages: shots.map((s) => s.pageNum) }
+    };
+  }
+};
+
 /**
- * 创建文档工具集。ocrTessdataDir 注入语言包缓存目录(开启扫描件按需 OCR);
- * 不传 → OCR 关闭(扫描件如实回"抽不出")。
+ * 创建文档工具集。ocrTessdataDir 注入语言包缓存目录(开启扫描件按需 OCR);不传 → OCR 关闭。
+ * 返回 [extract_document, view_document_pages];后者只有模型能读图时才有意义,
+ * 由组合根按 model.input 是否含 image 决定保不保留(同 browser_screenshot)。
  */
 export function createDocumentTools(opts: DocumentToolsOptions = {}): AgentTool<any>[] {
-  return [createExtractDocumentTool(opts)];
+  return [createExtractDocumentTool(opts), viewDocumentTool];
 }
 
 /** 便捷默认实例(无 OCR):测试 / 不需扫描件的场景用。生产由组合根经 createDocumentTools 注入缓存目录。 */
 export const documentTools: AgentTool<any>[] = createDocumentTools();
 
-export const documentToolNames: ReadonlySet<string> = new Set(["extract_document"]);
+export const documentToolNames: ReadonlySet<string> = new Set(["extract_document", "view_document_pages"]);
 
 export const documentToolRisk: Readonly<Record<string, RiskLevel>> = {
-  extract_document: "ReadOnly"
+  extract_document: "ReadOnly",
+  view_document_pages: "ReadOnly"
 };
 
 export const documentGuidelines = `## 文档提取
 - 需要理解某份文档(PDF/报告/合同等)的内容时,用 extract_document 抽成文本再读。
 - 扫描件/图片型 PDF 也用 extract_document —— 它已内建 OCR(自带引擎,首次会联网下载语言包,稍慢)。
-  **这就是本机能做到的 OCR 上限**:扫描件 OCR 难免有错字、表格/公章/花体尤其差,这是客观限制,不是工具没选对。
-  **严禁**再自己用 shell 调 tesseract / pdftotext / pdftoppm / pytesseract 等去"重试 OCR"——内建用的就是同一个 Tesseract,
-  你 shell 兜底只会更慢、更乱、还依赖用户机器装没装,结果不会更好。
-- 正确做法:就用 extract_document 这一次的结果,基于它能认出的部分如实总结;识别不清的地方明说"扫描件此处识别不清",
-  别为了凑完整去 shell 折腾,也别编造。
+- **扫描件 OCR 抽不准时(表格、公章、手写、花体)**:若你有 view_document_pages 工具(能看图),就用它把相关页渲染成图**直接看**,
+  按行列读表格,远比硬猜 OCR 文本可靠。没有该工具时,就用 OCR 能认出的部分如实总结、识别不清处明说,别编造。
+- **严禁**自己用 shell 调 tesseract / pdftotext / pdftoppm / pytesseract 等去"重试 OCR":内建用的就是同一个 Tesseract,
+  shell 兜底只会更慢更乱、还依赖用户机器装没装,结果不会更好。表格读不准就走 view_document_pages 或如实说明。
 - 大文档会被截断;若只关心局部,先 extract 看全貌,再按需结合其它工具定位。`;
 
 export { CAPABILITY as documentCapability };

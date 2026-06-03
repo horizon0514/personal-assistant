@@ -107,6 +107,7 @@ const EVALUATOR_TOOLS = new Set([
   "find_files",
   "grep_files",
   "extract_document",
+  "view_document_pages",
   "read_current_page"
 ]);
 
@@ -364,6 +365,16 @@ function buildAdapter(
   const activeBrowserTools = modelHasVision
     ? browserTools
     : browserTools.filter((t) => t.name !== "browser_screenshot");
+  // 同理:view_document_pages(PDF 页→图)只有模型能读图时才暴露,否则图会被降级丢弃、纯误导。
+  const documentToolsAll = createDocumentTools({
+    ocrTessdataDir: join(app.getPath("userData"), "tessdata"),
+    onProgress: (actionId, note) => {
+      if (!background) sendTo("step:progress", { actionId, note });
+    }
+  });
+  const activeDocumentTools = modelHasVision
+    ? documentToolsAll
+    : documentToolsAll.filter((t) => t.name !== "view_document_pages");
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -373,16 +384,11 @@ function buildAdapter(
       tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
     },
     {
-      // 扫描件按需 OCR 的语言包缓存放 <userData>/tessdata(首个扫描件触发下载,之后复用,不随 app 包)。
+      // 扫描件按需 OCR 的语言包缓存放 <userData>/tessdata;view_document_pages 仅视觉模型可见。
+      // (工具集在上面装配:含 onProgress 进度上报 + 按 modelHasVision 过滤视觉工具)
       capability: "document",
       alwaysOn: true,
-      tools: createDocumentTools({
-        ocrTessdataDir: join(app.getPath("userData"), "tessdata"),
-        // OCR/下载耗时,把"正在识别…"亮到对应 step 行,别让用户以为静默跳过。
-        onProgress: (actionId, note) => {
-          if (!background) sendTo("step:progress", { actionId, note });
-        }
-      })
+      tools: activeDocumentTools
     },
     {
       capability: "memory",
