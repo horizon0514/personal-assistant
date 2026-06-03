@@ -36,6 +36,11 @@ const DEFAULT_OCR_LANGS = ["chi_sim", "eng"] as const;
 /** OCR 渲染 DPI:Tesseract 在 ~300 DPI 上识别明显优于 liteparse 默认的 150(实测中文扫描件)。 */
 const OCR_DPI = 300;
 /**
+ * 语言包缓存的变体子目录。换变体(如从 _fast 升到标准版)就改这个名 → 自动走新目录重下,
+ * 旧缓存(可能是别的变体)失效不被误用,无需用户手动清。
+ */
+const OCR_VARIANT = "std";
+/**
  * 官方**标准**语言包(integer LSTM)下载源——比 _fast 变体准不少(实测同页抓到的字数翻倍),
  * 代价是体积(chi_sim ~44MB、eng ~23MB)。按需下载到缓存、不随 app 包,故体积换精度值。
  */
@@ -166,9 +171,10 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
         // 抽不到文本 = 扫描件/图片型 → 按需 OCR(liteparse 自带引擎 + 按需下载的语言包)。
         if (opts.ocrTessdataDir) {
           try {
-            const langs = await ensureTraineddata(opts.ocrTessdataDir, ocrLangs);
+            const tessDir = join(opts.ocrTessdataDir, OCR_VARIANT); // 变体子目录,旧缓存自动失效
+            const langs = await ensureTraineddata(tessDir, ocrLangs);
             if (langs.length > 0) {
-              const ocrParsed = await getOcrParser(opts.ocrTessdataDir, langs).parse(buf);
+              const ocrParsed = await getOcrParser(tessDir, langs).parse(buf);
               const ocr = clip(densifyCjk(ocrParsed.text).trim());
               if (ocr.text) {
                 return textResult(ocr.text, {
