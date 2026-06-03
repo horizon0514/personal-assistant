@@ -23,39 +23,6 @@ importers:
       '@llamaindex/liteparse':
         specifier: ^2.0.4
         version: 2.0.4
-      '@pa/cap-browser':
-        specifier: workspace:*
-        version: link:../../packages/cap-browser
-      '@pa/cap-document':
-        specifier: workspace:*
-        version: link:../../packages/cap-document
-      '@pa/cap-filesystem':
-        specifier: workspace:*
-        version: link:../../packages/cap-filesystem
-      '@pa/cap-shell':
-        specifier: workspace:*
-        version: link:../../packages/cap-shell
-      '@pa/ctx-memory':
-        specifier: workspace:*
-        version: link:../../packages/ctx-memory
-      '@pa/ctx-reversibility':
-        specifier: workspace:*
-        version: link:../../packages/ctx-reversibility
-      '@pa/ctx-skill':
-        specifier: workspace:*
-        version: link:../../packages/ctx-skill
-      '@pa/ctx-task':
-        specifier: workspace:*
-        version: link:../../packages/ctx-task
-      '@pa/ctx-trust':
-        specifier: workspace:*
-        version: link:../../packages/ctx-trust
-      '@pa/domain-core':
-        specifier: workspace:*
-        version: link:../../packages/domain-core
-      '@pa/infra':
-        specifier: workspace:*
-        version: link:../../packages/infra
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -99,6 +66,39 @@ importers:
       '@fontsource/noto-sans-sc':
         specifier: ^5.2.9
         version: 5.2.9
+      '@pa/cap-browser':
+        specifier: workspace:*
+        version: link:../../packages/cap-browser
+      '@pa/cap-document':
+        specifier: workspace:*
+        version: link:../../packages/cap-document
+      '@pa/cap-filesystem':
+        specifier: workspace:*
+        version: link:../../packages/cap-filesystem
+      '@pa/cap-shell':
+        specifier: workspace:*
+        version: link:../../packages/cap-shell
+      '@pa/ctx-memory':
+        specifier: workspace:*
+        version: link:../../packages/ctx-memory
+      '@pa/ctx-reversibility':
+        specifier: workspace:*
+        version: link:../../packages/ctx-reversibility
+      '@pa/ctx-skill':
+        specifier: workspace:*
+        version: link:../../packages/ctx-skill
+      '@pa/ctx-task':
+        specifier: workspace:*
+        version: link:../../packages/ctx-task
+      '@pa/ctx-trust':
+        specifier: workspace:*
+        version: link:../../packages/ctx-trust
+      '@pa/domain-core':
+        specifier: workspace:*
+        version: link:../../packages/domain-core
+      '@pa/infra':
+        specifier: workspace:*
+        version: link:../../packages/infra
       '@tailwindcss/typography':
         specifier: ^0.5.15
         version: 0.5.19(tailwindcss@3.4.19(yaml@2.9.0))

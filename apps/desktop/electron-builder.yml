@@ -9,6 +9,8 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - out/**
   - package.json
+  # 注:@pa/* 工作区包不在 dependencies(放 devDependencies)——它们被 electron-vite 打进 out/,
+  # 不是运行时依赖。electron-builder 只收生产依赖,故不会顺其符号链接走到 apps/desktop 之外。
   # liteparse 主包自带一份 linux 预编译产物(~20MB)作开发回退;生产真正用的是平台 optional 包
   # (@llamaindex/liteparse-<platform>,native loader 优先 require 它)。把主包里这两份冗余二进制剔除,省体积。
   - "!**/node_modules/@llamaindex/liteparse/liteparse.*.node"
