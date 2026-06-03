@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, HelpCircle, Square } from "lucide-react";
+import { ArrowUp, HelpCircle, Paperclip, Square, X } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { TurnTrace, type ActionRow, type StepGroup } from "./StepTrace";
 import { EmptyState } from "./EmptyState";
@@ -80,6 +80,9 @@ export function ChatPane(): JSX.Element {
   const { activeSessionId, ensureSession, openArtifact } = useShell();
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [input, setInput] = useState("");
+  // 拖入的附件:{ 显示名, 本地源路径 };发送时 main 会拷进会话附件目录并把绝对路径喂 agent。
+  const [attachments, setAttachments] = useState<{ name: string; path: string }[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [reviewState, setReviewState] = useState<ReviewState>("idle");
   // 当前是否有 plan 在等主输入框反馈(用户点了「不对,调一下」):
@@ -186,6 +189,13 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
+  // 工具执行中的进度提示(如扫描件 OCR / 下载语言包)→ 显示在对应 step 行(仅 running 时)
+  useEffect(() => {
+    return window.pa.step.onProgress((p) => {
+      setItems((prev) => patchAction(prev, p.actionId, { note: p.note }));
+    });
+  }, []);
+
   // Work Plan:执行器动手前起草 → 弹可编辑的对齐卡
   useEffect(() => {
     return window.pa.plan.onRequest((req) => {
@@ -266,12 +276,40 @@ export function ChatPane(): JSX.Element {
     });
   };
 
+  // 防止拖文件到窗口任意处时 Electron 把整窗导航到 file:// (覆盖默认行为,只在 drop 区接管)
+  useEffect(() => {
+    const prevent = (e: DragEvent): void => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
+
+  const onDragOver = (e: React.DragEvent): void => {
+    if (!Array.from(e.dataTransfer.types).includes("Files")) return; // 只接管拖文件,不接管选区拖拽
+    e.preventDefault();
+    setDragOver(true);
+  };
+  const onDrop = (e: React.DragEvent): void => {
+    e.preventDefault();
+    setDragOver(false);
+    const next = Array.from(e.dataTransfer.files)
+      .map((f) => ({ name: f.name, path: window.pa.files.pathForDropped(f) }))
+      .filter((a) => a.path); // 取不到本地路径的(非真实文件)跳过
+    if (next.length) setAttachments((prev) => [...prev, ...next]);
+  };
+  const removeAttachment = (i: number): void => setAttachments((prev) => prev.filter((_, idx) => idx !== i));
+
   const send = (textArg?: string): void => {
     const text = (textArg ?? input).trim();
-    if (!text) return;
+    const atts = attachments;
+    if (!text && atts.length === 0) return;
 
     // Hijack:plan 在等反馈 → 把消息喂回 plan 工具,不开新一轮 chat(agent loop 仍挂着等回应)
     if (pendingPlanFeedbackId) {
+      if (!text) return; // 改计划只走文本,附件在此场景无意义
       const planId = pendingPlanFeedbackId;
       window.pa.plan.resolve(planId, { kind: "feedback", text });
       setItems((prev) => [
@@ -288,15 +326,20 @@ export function ChatPane(): JSX.Element {
     if (streaming && reviewState === "idle") return;
     // 无会话时本次发送会创建会话并切换 activeSessionId;同步置标记,避免 reload effect 清空乐观消息
     if (!activeSessionId) sentIntoNewSession.current = true;
+    // 乐观气泡内容须与 main 落盘的用户消息一致(text + 文件名 📎),否则重开会话会跳一下。
+    const names = atts.map((a) => a.name);
+    const content = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
     setItems((prev) => [
       ...prev,
-      { kind: "msg", id: crypto.randomUUID(), role: "user", content: text },
+      { kind: "msg", id: crypto.randomUUID(), role: "user", content },
       { kind: "msg", id: crypto.randomUUID(), role: "assistant", content: "" }
     ]);
     setInput("");
+    setAttachments([]);
     setStreaming(true);
     setReviewState("idle"); // 若是在自查/返工期发的:本轮验收即将被后端打断,先把指示器收掉
-    void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text));
+    const paths = atts.map((a) => a.path);
+    void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text, paths.length ? paths : undefined));
   };
 
   const stop = (): void => {
@@ -306,7 +349,23 @@ export function ChatPane(): JSX.Element {
   const empty = items.length === 0;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col">
+    <section
+      className="relative flex min-w-0 flex-1 flex-col"
+      onDragOver={onDragOver}
+      onDragLeave={(e) => {
+        // 仅当真正离开整个 section(而非进入子元素)才收起拖拽态
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false);
+      }}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-2.5 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-ember-400/80 bg-ember-50/70 backdrop-blur-[1px] dark:border-ember-500/60 dark:bg-ember-500/10">
+          <div className="flex items-center gap-2 text-[13.5px] font-medium text-ember-700 dark:text-ember-200">
+            <Paperclip size={16} />
+            松开以添加为附件
+          </div>
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-auto">
         <div className="mx-auto w-full max-w-[760px] space-y-4 px-5 py-6">
           {empty && <EmptyState onPick={pickExample} />}
@@ -367,6 +426,27 @@ export function ChatPane(): JSX.Element {
 
       <div className="shrink-0">
         <div className="mx-auto w-full max-w-[760px] px-4 pb-5 pt-2">
+          {attachments.length > 0 && (
+            <div className="no-drag mb-1.5 flex flex-wrap gap-1.5">
+              {attachments.map((a, i) => (
+                <span
+                  key={`${a.path}-${i}`}
+                  className="flex max-w-[220px] items-center gap-1.5 rounded-lg bg-stone-100 py-1 pl-2 pr-1 text-[12px] text-stone-600 ring-1 ring-black/[0.04] dark:bg-ink-800 dark:text-stone-300 dark:ring-white/10"
+                  title={a.name}
+                >
+                  <Paperclip size={12} className="shrink-0 text-stone-400" />
+                  <span className="truncate">{a.name}</span>
+                  <button
+                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-stone-400 transition hover:bg-stone-200 hover:text-stone-600 dark:hover:bg-ink-700"
+                    onClick={() => removeAttachment(i)}
+                    aria-label={`移除 ${a.name}`}
+                  >
+                    <X size={11} strokeWidth={2.5} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="no-drag flex items-end gap-2 rounded-xl border border-stone-200 bg-white p-2 transition focus-within:border-ember-400 focus-within:ring-2 focus-within:ring-ember-500/15 dark:border-white/10 dark:bg-ink-900 dark:focus-within:border-ember-500/60 dark:focus-within:ring-ember-500/20">
             <textarea
               ref={inputRef}
@@ -399,7 +479,7 @@ export function ChatPane(): JSX.Element {
               <button
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-ember-500 text-ink-900 shadow-glow transition hover:bg-ember-400 disabled:opacity-30 disabled:shadow-none"
                 onClick={() => send()}
-                disabled={input.trim() === ""}
+                disabled={input.trim() === "" && attachments.length === 0}
                 aria-label="发送"
               >
                 <ArrowUp size={16} strokeWidth={2.5} />

@@ -354,17 +354,6 @@ export class BrowserManager implements BrowserController {
     return { found: false };
   }
 
-
-  async screenshot(signal?: AbortSignal): Promise<{ data: string; url: string }> {
-    const wc = await this.currentWebview(signal);
-    this.ensureDebugger(wc);
-    const res = (await wc.debugger.sendCommand("Page.captureScreenshot", { format: "png" })) as {
-      data: string;
-    };
-    console.log(`[browser] 截图完成 ${Math.round((res.data.length * 3) / 4 / 1024)}KB @ ${wc.getURL()}`);
-    return { data: res.data, url: wc.getURL() };
-  }
-
   /** 提取当前 webview 已加载页面的可读正文(不导航)。fetch 与 current 共用。 */
   private async readReadable(wc: WebContents): Promise<FetchedPage> {
     return (await wc.executeJavaScript(

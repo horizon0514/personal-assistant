@@ -9,6 +9,17 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - out/**
   - package.json
+  # liteparse 主包自带一份 linux 预编译产物(~20MB)作开发回退;生产真正用的是平台 optional 包
+  # (@llamaindex/liteparse-<platform>,native loader 优先 require 它)。把主包里这两份冗余二进制剔除,省体积。
+  - "!**/node_modules/@llamaindex/liteparse/liteparse.*.node"
+  - "!**/node_modules/@llamaindex/liteparse/libpdfium.*"
+
+# 原生模块解包:无法从 app.asar 内 dlopen 的原生库必须解包到 app.asar.unpacked。
+# - liteparse:.node(napi) + libpdfium 动态库(主包 + 各平台 optional 包)。
+# - onnxruntime-node:PaddleOCR 的推理后端,.node + libonnxruntime 动态库。
+asarUnpack:
+  - "**/node_modules/@llamaindex/liteparse*/**"
+  - "**/node_modules/onnxruntime-node/**"
 
 directories:
   output: release/${version}
@@ -18,6 +29,12 @@ directories:
 
 mac:
   category: public.app-category.productivity
+  # onnxruntime-node 自带全平台原生库(~255MB);mac 包只留 darwin,剔除 win32/linux(省 ~190MB)。
+  # 注意:onnxruntime-node 的 darwin 只有 arm64,没有 x64 —— Intel Mac(x64)上 PaddleOCR 不可用,
+  # 扫描件 OCR 会优雅降级回"抽不出"(不崩)。若要支持 Intel Mac 需另寻 x64 二进制或砍掉 x64 target。
+  files:
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/win32/**"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**"
   target:
     - target: dmg
       arch:
@@ -35,6 +52,10 @@ mac:
   gatekeeperAssess: false
 
 win:
+  # 同上:win 包只留 win32 的 onnxruntime,剔除 darwin/linux。
+  files:
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
+    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**"
   target:
     - target: nsis
       arch:

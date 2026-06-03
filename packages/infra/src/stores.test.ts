@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -126,6 +126,28 @@ describe("SessionStore", () => {
     expect(s2.listArchived()).toHaveLength(1);
     s2.setArchived(rec.id, false);
     expect(s2.list().some((x) => x.id === rec.id)).toBe(true);
+  });
+
+  it("saveAttachment 把外部文件拷进会话附件目录,删会话连带清掉", () => {
+    const wsDir = join(root, "ws-att");
+    const s = new SessionStore(wsDir);
+    const rec = s.create("带附件");
+
+    // 准备一个外部源文件
+    const src = join(root, "report.pdf");
+    writeFileSync(src, "PDFDATA");
+
+    const dest = s.saveAttachment(rec.id, src);
+    expect(dest).toContain(join(wsDir, "sessions", `${rec.id}.attachments`));
+    expect(dest.endsWith("-report.pdf")).toBe(true); // 原名保留 + 短随机前缀
+    expect(existsSync(dest)).toBe(true);
+    expect(readFileSync(dest, "utf8")).toBe("PDFDATA"); // 是拷贝,内容一致
+    expect(existsSync(src)).toBe(true); // 原件不动
+
+    // 删会话 → 附件目录连带清掉
+    s.remove(rec.id);
+    expect(existsSync(dest)).toBe(false);
+    expect(existsSync(join(wsDir, "sessions", `${rec.id}.attachments`))).toBe(false);
   });
 });
 

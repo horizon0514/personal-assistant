@@ -17,6 +17,8 @@ export interface ActionRow {
   summary?: string; // 关键参数摘要(如查询词 / 文件名)
   riskLevel?: string;
   error?: string;
+  /** 执行中进度提示(如"扫描件:正在 OCR 识别…");仅 running 时显示 */
+  note?: string;
   /** 工具结果文本(可查看工具);存在则该行显示"查看",点开到 artifact 面板 */
   resultBody?: string;
 }
@@ -225,6 +227,9 @@ function ActionLine({
           ) : null}
         </span>
       </div>
+      {a.note && a.status === "running" && (
+        <p className="ml-[22px] break-words text-[11.5px] text-stone-400 dark:text-stone-500">{a.note}</p>
+      )}
       {a.error && <p className="ml-[22px] break-words text-[11.5px] text-rose-500">{a.error}</p>}
     </div>
   );

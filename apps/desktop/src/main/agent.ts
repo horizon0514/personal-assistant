@@ -8,7 +8,7 @@
  */
 import { app, BrowserWindow, type WebContents } from "electron";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   PiAgentAdapter,
@@ -39,7 +39,7 @@ import {
   filesystemToolRisk,
   type FileChangeOp
 } from "@pa/cap-filesystem";
-import { documentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
+import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
@@ -62,9 +62,6 @@ import { keyStore } from "./key-store";
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
 const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "deepseek-v4-flash";
 const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
-// vision 覆盖:强行把模型标注为支持图片输入。默认关——已实测 deepseek-v4-flash 的 API
-// 拒收 image_url(只认 text)。将来换到支持图片的模型时设 MAIN_VITE_VISION=1 开启。
-const FORCE_VISION = import.meta.env.MAIN_VITE_VISION === "1";
 
 /**
  * 跨平台 shell 底座解析(见 akari-goal:exec_shell 跨平台底座)。
@@ -202,6 +199,19 @@ interface TurnSelection {
 const selectorsBySession = new Map<string, (userText: string, recent: Set<Capability>) => TurnSelection>();
 // 每会话「本轮 gated guideline 串」(send 里随 selectTools 写入,contextProvider 按轮注入)。
 const turnGuidelineBySession = new Map<string, string>();
+// 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
+// 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
+const turnAttachmentsBySession = new Map<string, string[]>();
+
+/** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
+function renderTurnAttachments(paths: string[] | undefined): string | undefined {
+  if (!paths || paths.length === 0) return undefined;
+  return [
+    "## 本轮附件(用户随这条消息拖入,已存到本地)",
+    "需要其内容时用 extract_document(PDF/文本)按下列绝对路径读取,别让用户再贴一遍:",
+    ...paths.map((p) => `- ${p}`)
+  ].join("\n");
+}
 
 // ── 持久化根 ─────────────────────────────────────────────────
 const workspaces = new WorkspaceStore(join(app.getPath("userData"), "workspaces"));
@@ -345,12 +355,14 @@ function buildAdapter(
   //（否则后台任务的 token 会串进用户当前打开的会话视图);transcript 仍照常落盘。
   const background = opts.background ?? false;
   const memory = getMemory(wsId);
-  const model = createModel({ provider: PROVIDER, modelId: MODEL, forceVision: FORCE_VISION });
-  const modelHasVision = model.input.includes("image");
-  // 模型不收图时不暴露 browser_screenshot——否则截图只会被降级成占位文字,纯误导模型。
-  const activeBrowserTools = modelHasVision
-    ? browserTools
-    : browserTools.filter((t) => t.name !== "browser_screenshot");
+  const model = createModel({ provider: PROVIDER, modelId: MODEL });
+  // 文档工具:OCR 是基础能力,模型缓存目录固定注入;onProgress 把"正在识别/下载"亮到 step 行。
+  const documentTools = createDocumentTools({
+    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
+    onProgress: (actionId, note) => {
+      if (!background) sendTo("step:progress", { actionId, note });
+    }
+  });
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -359,7 +371,12 @@ function buildAdapter(
       alwaysOn: true,
       tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
     },
-    { capability: "document", alwaysOn: true, tools: [...documentTools] },
+    {
+      // 工具集在上面装配:extract_document(含 PaddleOCR 扫描件 OCR + onProgress 进度上报)。
+      capability: "document",
+      alwaysOn: true,
+      tools: documentTools
+    },
     {
       capability: "memory",
       alwaysOn: true,
@@ -370,7 +387,7 @@ function buildAdapter(
       // 误以为有 web 工具、找不到就退化成 curl 抓网页(SPA 抓空壳 + curl 走审批)。故 alwaysOn,其 guideline 进冻结 prompt。
       capability: "browser",
       alwaysOn: true,
-      tools: activeBrowserTools
+      tools: browserTools
     },
     {
       capability: "shell",
@@ -468,6 +485,8 @@ function buildAdapter(
         buildSessionContext(),
         // 本轮选中的 gated 能力(browser/shell/schedule)guideline——随 selectTools 同门注入,无关任务不背。
         turnGuidelineBySession.get(sessionId),
+        // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
+        renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -584,6 +603,7 @@ export const agent = {
     selectorsBySession.clear();
     recentBySession.clear();
     turnGuidelineBySession.clear();
+    turnAttachmentsBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -634,13 +654,28 @@ export const agent = {
     broadcast("session:changed", sessions.list());
   },
 
-  async send(sender: WebContents, sessionId: string, text: string): Promise<void> {
+  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[]): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
     const gen = (runGenBySession.get(sessionId) ?? 0) + 1;
     runGenBySession.set(sessionId, gen);
     const sessions = getSessions(activeWorkspaceId);
+
+    // 拖入的附件:拷进会话附件目录(可复现,原件被挪/删不影响重放),完整绝对路径经
+    // contextProvider 注入给 agent;用户消息只追加文件名,避免长路径污染气泡。
+    const savedPaths: string[] = [];
+    const names: string[] = [];
+    for (const src of attachments ?? []) {
+      try {
+        savedPaths.push(sessions.saveAttachment(sessionId, src));
+        names.push(basename(src));
+      } catch (err) {
+        console.warn(`[chat] 附件拷贝失败(忽略): ${src} — ${String(err)}`);
+      }
+    }
+    turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
+    const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
 
     let instance: PiAgentAdapter;
     try {
@@ -658,21 +693,21 @@ export const agent = {
       if (selector) {
         const prevRecent = recentBySession.get(sessionId) ?? new Set<Capability>();
         recentBySession.set(sessionId, new Set()); // 重置:本轮的累加从空开始
-        const selection = selector(text, prevRecent);
+        const selection = selector(userText, prevRecent);
         instance.setTools(selection.tools);
         // 本轮 gated guideline 存入槽,contextProvider(startTask 内被调)按轮读取注入,时序与 setTools 一致。
         turnGuidelineBySession.set(sessionId, selection.guideline);
       }
-      await instance.startTask({ text, conversationId: newConversationId() });
+      await instance.startTask({ text: userText, conversationId: newConversationId() });
       // 被后来的 send 顶替(用户在验收期发了新消息)→ 本轮已被打断,流由新 run 接管,
       // 这里不再发 done/error,也不抢着落盘(新 run 会落自己的)。
       if (runGenBySession.get(sessionId) !== gen) return;
       // 落盘:transcript 快照 + 首条用户消息自动命名(先截断占位)
       sessions.saveTranscript(sessionId, instance.snapshotTranscript());
-      const placeholder = autoTitle(sessions, sessionId, text);
+      const placeholder = autoTitle(sessions, sessionId, userText);
       broadcast("session:changed", sessions.list());
       // 首轮:异步用 AI 升级标题,不阻塞本次回复完成
-      if (placeholder) void generateSessionTitle(sessions, sessionId, text, placeholder);
+      if (placeholder) void generateSessionTitle(sessions, sessionId, userText, placeholder);
       // pi 出错时不抛异常,错误落在 state 里——主动捞出来让 UI 看到,而非静默结束。
       const runError = instance.lastError();
       if (runError) {
@@ -736,6 +771,7 @@ export const agent = {
       selectorsBySession.delete(sessionId);
       recentBySession.delete(sessionId);
       turnGuidelineBySession.delete(sessionId);
+      turnAttachmentsBySession.delete(sessionId);
     }
   },
 

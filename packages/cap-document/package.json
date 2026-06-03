@@ -13,10 +13,12 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@pa/domain-core": "workspace:*",
     "@earendil-works/pi-agent-core": "^0.75.4",
     "@earendil-works/pi-ai": "^0.75.4",
-    "pdf-parse": "^1.1.1"
+    "@llamaindex/liteparse": "^2.0.4",
+    "@pa/domain-core": "workspace:*",
+    "onnxruntime-node": "^1.26.0",
+    "ppu-paddle-ocr": "^5.8.3"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

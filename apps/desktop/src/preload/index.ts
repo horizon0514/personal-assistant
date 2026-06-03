@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
@@ -126,8 +126,13 @@ const api = {
     setApiKey: (key: string): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:setApiKey", key),
     clearApiKey: (): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:clearApiKey")
   },
+  /** 拖入文件:在渲染层从 File 对象取其本地绝对路径(Electron 33 起 File.path 已移除,须用 webUtils)。 */
+  files: {
+    pathForDropped: (file: File): string => webUtils.getPathForFile(file)
+  },
   chat: {
-    send: (sessionId: string, text: string): void => ipcRenderer.send("chat:send", { sessionId, text }),
+    send: (sessionId: string, text: string, attachments?: string[]): void =>
+      ipcRenderer.send("chat:send", { sessionId, text, attachments }),
     /** 停止当前会话正在进行的运行 */
     stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
@@ -152,6 +157,12 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: StepResult): void => cb(payload);
       ipcRenderer.on("step:result", listener);
       return () => ipcRenderer.removeListener("step:result", listener);
+    },
+    /** 订阅工具执行中的进度提示(如扫描件 OCR / 下载语言包),按 actionId 更新对应 step 行 */
+    onProgress: (cb: (p: { actionId: string; note: string }) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: { actionId: string; note: string }): void => cb(payload);
+      ipcRenderer.on("step:progress", listener);
+      return () => ipcRenderer.removeListener("step:progress", listener);
     }
   },
   browser: {

@@ -52,8 +52,6 @@ export interface BrowserController {
   ): Promise<{ url: string }>;
   /** 轮询等待 selector 出现,超时返回 found:false(不抛错)。供 click/type 的 waitFor 内部调用。 */
   waitFor(selector: string, timeoutMs: number, signal?: AbortSignal): Promise<{ found: boolean }>;
-  /** 截取当前可见视口为 PNG(base64)。 */
-  screenshot(signal?: AbortSignal): Promise<{ data: string; url: string }>;
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
@@ -117,8 +115,6 @@ const typeParams = Type.Object({
     Type.String({ description: "提交后等待出现的元素 CSS selector(异步/SPA 加载时用),最多等 10s" })
   )
 });
-
-const screenshotParams = Type.Object({});
 
 const readCurrentParams = Type.Object({});
 
@@ -200,24 +196,7 @@ export function createBrowserTools(controller: BrowserController): AgentTool<any
     }
   };
 
-  const browserScreenshot: AgentTool<typeof screenshotParams> = {
-    name: "browser_screenshot",
-    label: "页面截图",
-    description: "截取内置浏览器当前可见画面,用于确认页面状态或读取无法提取为文本的内容。",
-    parameters: screenshotParams,
-    execute: async (_id, _args, signal) => {
-      const shot = await controller.screenshot(signal);
-      return {
-        content: [
-          { type: "text", text: `当前页面截图:${shot.url}` },
-          { type: "image", data: shot.data, mimeType: "image/png" }
-        ],
-        details: { url: shot.url }
-      };
-    }
-  };
-
-  return [webSearch, webFetch, browserOpen, readCurrentPage, browserClick, browserType, browserScreenshot];
+  return [webSearch, webFetch, browserOpen, readCurrentPage, browserClick, browserType];
 }
 
 export const browserToolNames: ReadonlySet<string> = new Set([
@@ -226,8 +205,7 @@ export const browserToolNames: ReadonlySet<string> = new Set([
   "browser_open",
   "read_current_page",
   "browser_click",
-  "browser_type",
-  "browser_screenshot"
+  "browser_type"
 ]);
 
 /**
@@ -241,8 +219,7 @@ export const browserToolRisk: Readonly<Record<string, RiskLevel>> = {
   browser_open: "ReadOnly",
   read_current_page: "ReadOnly",
   browser_click: "ReadOnly",
-  browser_type: "ReadOnly",
-  browser_screenshot: "ReadOnly"
+  browser_type: "ReadOnly"
 };
 
 export const browserGuidelines = `## 网页调研(用内置浏览器)
