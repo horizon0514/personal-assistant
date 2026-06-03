@@ -7,10 +7,15 @@
  *
  * 落盘位置:userData/eval-telemetry.jsonl(全局单份,追加写,永不阻塞主流程——失败只告警)。
  */
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { app } from "electron";
 import type { EvalTelemetryRecord } from "@pa/ctx-task";
+
+/** 触发轮转的文件大小上限(超过即裁到最近 KEEP_LINES 行)。 */
+const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+/** 轮转后保留的最近行数(每行数百字节,2000 行裁完约 ~1MB,远低于上限,不会每次写都重裁)。 */
+const KEEP_LINES = 2000;
 
 /** 一行落盘记录:适配器的 {@link EvalTelemetryRecord} 加上写入时补的时间戳 + 会话/来源。 */
 export interface PersistedEvalRecord extends EvalTelemetryRecord {
@@ -48,15 +53,46 @@ function filePath(): string {
   return join(app.getPath("userData"), "eval-telemetry.jsonl");
 }
 
+/**
+ * 串行化写链:append 与轮转 rewrite 都挂在这条链上,保证两者不交错
+ * (否则一次裁剪 rewrite 撞上一次 append 会丢行/写花)。失败只告警,永不阻塞主流程。
+ */
+let writeChain: Promise<void> = Promise.resolve();
+
 /** 给适配器的一笔记录补上时间戳 + 会话/来源元信息,追加成一行 JSON。 */
 export function recordEval(
   meta: { sessionId: string; source: "interactive" | "scheduled" },
   rec: EvalTelemetryRecord
 ): void {
   const line = JSON.stringify({ ts: Date.now(), ...meta, ...rec }) + "\n";
-  void appendFile(filePath(), line, "utf8").catch((err) =>
-    console.warn(`[eval-telemetry] 写入失败(忽略): ${String(err)}`)
-  );
+  writeChain = writeChain
+    .then(() => appendFile(filePath(), line, "utf8"))
+    .then(() => maybeRotate())
+    .catch((err) => console.warn(`[eval-telemetry] 写入失败(忽略): ${String(err)}`));
+}
+
+/**
+ * 纯逻辑:文件文本超过保留行数时,裁到最近 keep 行(去空行)。
+ * 不需要裁(行数不足、或裁不动)返回 null。抽出便于单测,不碰 IO。
+ */
+export function trimToLastLines(raw: string, keep: number): string | null {
+  const lines = raw.split("\n").filter((l) => l.trim());
+  if (lines.length <= keep) return null;
+  return lines.slice(-keep).join("\n") + "\n";
+}
+
+/** 文件超过 MAX_BYTES 时裁到最近 KEEP_LINES 行原地重写。仅在串行写链内调用。 */
+async function maybeRotate(): Promise<void> {
+  const p = filePath();
+  let size: number;
+  try {
+    size = (await stat(p)).size;
+  } catch {
+    return; // 文件不存在等 → 无需轮转
+  }
+  if (size <= MAX_BYTES) return;
+  const trimmed = trimToLastLines(await readFile(p, "utf8"), KEEP_LINES);
+  if (trimmed) await writeFile(p, trimmed, "utf8");
 }
 
 function emptySummary(): EvalTelemetrySummary {
