@@ -9,12 +9,26 @@ artifactName: ${productName}-${version}-${os}-${arch}.${ext}
 files:
   - out/**
   - package.json
+  # 显式排除非应用内容,别让它们漏进 asar:
+  # - release/ 是构建产物目录,旧版本的整个 .app/dmg(几百 MB)会被套娃打进新包——这是体积大头。
+  # - src/ 源码、配置、sourcemap 都不该进运行时包。
+  - "!release/**"
+  - "!src/**"
+  - "!**/*.map"
+  - "!{tsconfig*.json,*.config.ts,*.config.js,electron-builder.yml,.env*}"
   # 注:@pa/* 工作区包不在 dependencies(放 devDependencies)——它们被 electron-vite 打进 out/,
   # 不是运行时依赖。electron-builder 只收生产依赖,故不会顺其符号链接走到 apps/desktop 之外。
   # liteparse 主包自带一份 linux 预编译产物(~20MB)作开发回退;生产真正用的是平台 optional 包
   # (@llamaindex/liteparse-<platform>,native loader 优先 require 它)。把主包里这两份冗余二进制剔除,省体积。
   - "!**/node_modules/@llamaindex/liteparse/liteparse.*.node"
   - "!**/node_modules/@llamaindex/liteparse/libpdfium.*"
+  # 没用的 provider SDK(~52MB):pi-ai 支持多家,但本应用只用 deepseek(走 openai-completions,
+  # 故 openai 包要留)。其余 provider 都是 lazy 动态 import、deepseek 永不触发 → 排除。@smithy 是 @aws-sdk 专用传递依赖。
+  - "!**/node_modules/@mistralai/**"
+  - "!**/node_modules/@google/genai/**"
+  - "!**/node_modules/@anthropic-ai/**"
+  - "!**/node_modules/@aws-sdk/**"
+  - "!**/node_modules/@smithy/**"
 
 # 原生模块解包:无法从 app.asar 内 dlopen 的原生库必须解包到 app.asar.unpacked。
 # - liteparse:.node(napi) + libpdfium 动态库(主包 + 各平台 optional 包)。

@@ -21,17 +21,9 @@
     "@earendil-works/pi-agent-core": "^0.75.4",
     "@earendil-works/pi-ai": "^0.75.4",
     "@llamaindex/liteparse": "^2.0.4",
-    "clsx": "^2.1.1",
     "electron-updater": "^6.8.3",
-    "highlight.js": "^11.11.1",
-    "lucide-react": "^1.16.0",
     "onnxruntime-node": "^1.26.0",
-    "ppu-paddle-ocr": "^5.8.3",
-    "react-markdown": "^9.0.1",
-    "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.0",
-    "tailwind-merge": "^2.5.5",
-    "zustand": "^5.0.2"
+    "ppu-paddle-ocr": "^5.8.3"
   },
   "devDependencies": {
     "@fontsource-variable/inter": "^5.2.8",
@@ -54,15 +46,23 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "clsx": "^2.1.1",
     "electron": "33.4.11",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
+    "highlight.js": "^11.11.1",
+    "lucide-react": "^1.16.0",
     "postcss": "^8.4.49",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.0",
+    "tailwind-merge": "^2.5.5",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "zustand": "^5.0.2"
   }
 }
