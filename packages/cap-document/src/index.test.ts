@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDocumentTools, documentToolNames, documentToolRisk } from "./index";
+import { createDocumentTools, documentToolNames, documentToolRisk, extractDocument } from "./index";
 
 const FIXTURES = join(fileURLToPath(new URL(".", import.meta.url)), "__fixtures__");
 
@@ -53,5 +53,54 @@ describe("extract_document", () => {
     expect(text).toContain("LiteParse"); // 英文
     expect(text).toContain("中文一行测试"); // 中文不乱码
     expect(text).toContain("12345"); // 数字/符号
+  });
+});
+
+const opts = { ocrModelDir: join(tmpdir(), "pa-doc-ocr-models") };
+
+describe("extractDocument(结构化抽取 — Notebook 接地地基)", () => {
+  it("纯文本类:单段 page=1,原样保留(不 trim)", async () => {
+    const dir2 = mkdtempSync(join(tmpdir(), "pa-doc-"));
+    try {
+      const p = join(dir2, "note.md");
+      writeFileSync(p, "  # 标题\n正文  ");
+      const r = await extractDocument(p, opts);
+      expect(r.kind).toBe("text");
+      expect(r.ocr).toBe(false);
+      expect(r.pages).toEqual([{ page: 1, text: "  # 标题\n正文  " }]);
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it("不支持格式:pages 空 + note 说明,不抛", async () => {
+    const dir2 = mkdtempSync(join(tmpdir(), "pa-doc-"));
+    try {
+      const p = join(dir2, "a.bin");
+      writeFileSync(p, "x");
+      const r = await extractDocument(p, opts);
+      expect(r.kind).toBe("unsupported");
+      expect(r.pages).toHaveLength(0);
+      expect(r.note).toContain("不支持");
+    } finally {
+      rmSync(dir2, { recursive: true, force: true });
+    }
+  });
+
+  it("数字版 PDF:返回逐页文本,每页带页码,正文可定位到页", async () => {
+    const r = await extractDocument(join(FIXTURES, "digital-text.pdf"), opts);
+    expect(r.kind).toBe("pdf");
+    expect(r.ocr).toBe(false);
+    expect(r.pages.length).toBeGreaterThanOrEqual(1);
+    // pageCount 是总页数,>= 抽出的非空页数
+    expect(r.pageCount).toBeGreaterThanOrEqual(r.pages.length);
+    for (const pg of r.pages) {
+      expect(pg.page).toBeGreaterThanOrEqual(1);
+      expect(pg.text.length).toBeGreaterThan(0);
+    }
+    // 已知正文落在某一页里(逐页文本拼起来含原内容)
+    const all = r.pages.map((p) => p.text).join("\n");
+    expect(all).toContain("LiteParse");
+    expect(all).toContain("中文一行测试");
   });
 });
