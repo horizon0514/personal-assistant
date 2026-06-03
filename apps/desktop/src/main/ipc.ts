@@ -105,4 +105,11 @@ export function registerIpc(): void {
   ipcMain.handle("memory:listForgotten", (_e, wsId: string) => agent.listForgottenMemory(wsId));
   ipcMain.on("memory:remove", (_e, p: { wsId: string; id: string }) => agent.removeMemory(p.wsId, p.id));
   ipcMain.on("memory:restore", (_e, p: { wsId: string; id: string }) => agent.restoreMemory(p.wsId, p.id));
+
+  // 知识库(只读浏览;增删仍走对话工具,变更经 notebook:changed 广播刷新左侧面板)
+  ipcMain.handle("notebook:list", (_e, wsId: string) => agent.listNotebooks(wsId));
+  ipcMain.handle("notebook:get", (_e, p: { wsId: string; name: string }) => agent.notebookDetail(p.wsId, p.name));
+  ipcMain.handle("notebook:readSource", (_e, p: { wsId: string; name: string; ref: string }) =>
+    agent.readNotebookSource(p.wsId, p.name, p.ref)
+  );
 }

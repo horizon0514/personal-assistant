@@ -309,6 +309,9 @@ function broadcast(channel: string, payload: unknown): void {
 function broadcastMemory(wsId: string): void {
   broadcast("memory:changed", { wsId, items: getMemory(wsId).list() });
 }
+function broadcastNotebooks(wsId: string): void {
+  broadcast("notebook:changed", { wsId, notebooks: getNotebook(wsId).listNotebooks() });
+}
 /** 定时任务 NL 工具:模型从一句话建/查/改/删,变更后广播 schedule:changed 让面板实时刷新。 */
 const scheduleTools = createScheduleTools({
   list: () => schedules.list(),
@@ -382,8 +385,11 @@ function buildAdapter(
   };
   const documentTools = createDocumentTools({ ocrModelDir, onProgress: onDocProgress });
   // 知识库(来源集):入库复用 cap-document 的抽取器(注入,保持 ctx-notebook 与 cap 解耦);每 workspace 一份。
-  const notebookTools = createNotebookTools(getNotebook(wsId), (path, actionId) =>
-    extractDocument(path, { ocrModelDir, onProgress: onDocProgress }, actionId)
+  // onChange → 广播 notebook:changed,agent 在对话里增删来源时左侧面板实时刷新。
+  const notebookTools = createNotebookTools(
+    getNotebook(wsId),
+    (path, actionId) => extractDocument(path, { ocrModelDir, onProgress: onDocProgress }, actionId),
+    () => broadcastNotebooks(wsId)
   );
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
@@ -854,6 +860,15 @@ export const agent = {
   restoreMemory(wsId: string, id: string): void {
     getMemory(wsId).restore(id);
     broadcastMemory(wsId);
+  },
+
+  // Notebook(知识库,按 wsId 参数化)——左侧面板只读浏览。
+  listNotebooks: (wsId: string) => getNotebook(wsId).listNotebooks(),
+  notebookDetail: (wsId: string, name: string) => getNotebook(wsId).getNotebook(name) ?? null,
+  /** 读某来源的逐页全文(供右栏查看 / 引用跳转)。 */
+  readNotebookSource(wsId: string, name: string, ref: string) {
+    const s = getNotebook(wsId).getSource(name, ref);
+    return s ? { id: s.id, name: s.name, pageCount: s.pageCount, ocr: s.ocr, pages: s.pages } : null;
   },
 
   listJournal: () => journal.list(),

@@ -1,16 +1,26 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, SquarePen, CalendarClock } from "lucide-react";
+import { Archive, SquarePen, CalendarClock, BookOpen } from "lucide-react";
 import { useShell } from "../shell/store";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { ArchivedSessions } from "./ArchivedSessions";
 import { ScheduleManager } from "../schedule/ScheduleManager";
+import { NotebookManager } from "../notebook/NotebookManager";
 
 /** 最左栏:当前 workspace 的会话列表 + 左下角 workspace 切换/设置。可折叠、可调宽。 */
 export function SessionList(): JSX.Element {
-  const { sessions, activeSessionId, setActiveSession, newSession, archiveSession, sidebarWidth, setSidebarWidth } =
-    useShell();
+  const {
+    sessions,
+    activeSessionId,
+    setActiveSession,
+    newSession,
+    archiveSession,
+    sidebarWidth,
+    setSidebarWidth,
+    activeWorkspaceId
+  } = useShell();
   const dragging = useRef(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [notebookOpen, setNotebookOpen] = useState(false);
 
   useEffect(() => {
     const onMove = (e: MouseEvent): void => {
@@ -49,17 +59,28 @@ export function SessionList(): JSX.Element {
           <SquarePen size={15} strokeWidth={2} />
           新会话
         </button>
-        <button
-          className="flex w-full items-center justify-center gap-1.5 rounded-xl py-1.5 text-[12px] text-stone-500 transition hover:bg-stone-100 hover:text-ember-600 dark:text-stone-400 dark:hover:bg-ink-800"
-          onClick={() => setScheduleOpen(true)}
-          title="管理定时任务(如每天早上发新闻)"
-        >
-          <CalendarClock size={14} strokeWidth={2} />
-          定时任务
-        </button>
+        <div className="flex gap-1.5">
+          <button
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-1.5 text-[12px] text-stone-500 transition hover:bg-stone-100 hover:text-ember-600 dark:text-stone-400 dark:hover:bg-ink-800"
+            onClick={() => setNotebookOpen(true)}
+            title="知识库:把资料攒成来源集,基于它带引用问答"
+          >
+            <BookOpen size={14} strokeWidth={2} />
+            知识库
+          </button>
+          <button
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl py-1.5 text-[12px] text-stone-500 transition hover:bg-stone-100 hover:text-ember-600 dark:text-stone-400 dark:hover:bg-ink-800"
+            onClick={() => setScheduleOpen(true)}
+            title="管理定时任务(如每天早上发新闻)"
+          >
+            <CalendarClock size={14} strokeWidth={2} />
+            定时任务
+          </button>
+        </div>
       </div>
 
       {scheduleOpen && <ScheduleManager onClose={() => setScheduleOpen(false)} />}
+      {notebookOpen && <NotebookManager workspaceId={activeWorkspaceId} onClose={() => setNotebookOpen(false)} />}
 
       <div className="flex-1 space-y-0.5 overflow-auto px-2 pb-2">
         {sessions.length === 0 ? (
