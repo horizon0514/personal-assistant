@@ -9,8 +9,8 @@
  * OCR(扫描件/图片型 PDF):
  * - 引擎用 liteparse **自带的** Tesseract(已静态编进 .node),不依赖系统 tesseract、不 shell 装任何东西。
  * - 但 liteparse **不随包带语言包(traineddata)**。我们的策略:**按需下载,不随 app 包**——
- *   首个扫描件触发时,从官方 tessdata_fast 下载需要的语言(默认 chi_sim+eng,~6.5MB)到本地缓存目录,
- *   之后复用。数字版 PDF 直接抽嵌入文本,根本不碰 OCR。
+ *   首个扫描件触发时,从官方标准 tessdata 下载需要的语言(默认 chi_sim+eng)到本地缓存目录,之后复用。
+ *   用标准版(非 _fast)+ DPI 300 + 收 CJK 字间空格,中文扫描件识别质量明显更好。数字版 PDF 不碰 OCR。
  * - 缓存目录由组合根注入(ocrTessdataDir);不注入则 OCR 关闭(扫描件如实回"抽不出",零回归)。
  *
  * docx/xlsx 需另装 LibreOffice,不在开箱即用范围,暂不支持。
@@ -31,10 +31,20 @@ const MAX_TEXT_CHARS = 200_000;
 /** 纯文本类扩展名:直接按 utf8 读。 */
 const PLAINTEXT_EXT = new Set([".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".log", ".xml", ".yaml", ".yml"]);
 
-/** 默认 OCR 语言(中文场景):简体中文 + 英文。tessdata_fast 变体,准够用、体积小。 */
+/** 默认 OCR 语言(中文场景):简体中文 + 英文。 */
 const DEFAULT_OCR_LANGS = ["chi_sim", "eng"] as const;
-/** 官方语言包(fast 变体)下载源。 */
-const TESSDATA_FAST_BASE = "https://github.com/tesseract-ocr/tessdata_fast/raw/main";
+/** OCR 渲染 DPI:Tesseract 在 ~300 DPI 上识别明显优于 liteparse 默认的 150(实测中文扫描件)。 */
+const OCR_DPI = 300;
+/**
+ * 语言包缓存的变体子目录。换变体(如从 _fast 升到标准版)就改这个名 → 自动走新目录重下,
+ * 旧缓存(可能是别的变体)失效不被误用,无需用户手动清。
+ */
+const OCR_VARIANT = "std";
+/**
+ * 官方**标准**语言包(integer LSTM)下载源——比 _fast 变体准不少(实测同页抓到的字数翻倍),
+ * 代价是体积(chi_sim ~44MB、eng ~23MB)。按需下载到缓存、不随 app 包,故体积换精度值。
+ */
+const TESSDATA_BASE = "https://github.com/tesseract-ocr/tessdata/raw/main";
 
 export interface DocumentToolsOptions {
   /** OCR 语言包缓存目录(组合根注入,如 <userData>/tessdata)。不给 → OCR 关闭。 */
@@ -52,6 +62,14 @@ function clip(text: string): { text: string; truncated: boolean } {
   return { text: text.slice(0, MAX_TEXT_CHARS) + "\n…(内容过长已截断)", truncated: true };
 }
 
+/**
+ * OCR 后处理:Tesseract 对中文常逐字插空格(版面模式下尤甚),收掉「两个汉字之间」的空白,
+ * 大幅提升可读性(也省 token)。只动汉字之间的空白,不碰中英/中数之间的分隔。
+ */
+function densifyCjk(text: string): string {
+  return text.replace(/([一-鿿])\s+(?=[一-鿿])/g, "$1");
+}
+
 // ── LiteParse 实例(构造时加载原生 .node;懒建,隔离加载失败)─────────────
 // 数字版抽取(ocrEnabled:false,快);OCR 版按「目录+语言」缓存,ocrLanguage 决定识别哪些语言。
 let digitalParser: LiteParse | null = null;
@@ -64,7 +82,13 @@ function getOcrParser(tessdataDir: string, langs: string[]): LiteParse {
   const key = `${tessdataDir}|${langs.join("+")}`;
   let p = ocrParsers.get(key);
   if (!p) {
-    p = new LiteParse({ outputFormat: "text", ocrEnabled: true, ocrLanguage: langs.join("+"), tessdataPath: tessdataDir });
+    p = new LiteParse({
+      outputFormat: "text",
+      ocrEnabled: true,
+      ocrLanguage: langs.join("+"),
+      tessdataPath: tessdataDir,
+      dpi: OCR_DPI
+    });
     ocrParsers.set(key, p);
   }
   return p;
@@ -79,7 +103,7 @@ function ensureLang(dir: string, lang: string): Promise<boolean> {
   let p = inflight.get(dest);
   if (!p) {
     p = (async (): Promise<boolean> => {
-      const res = await fetch(`${TESSDATA_FAST_BASE}/${lang}.traineddata`);
+      const res = await fetch(`${TESSDATA_BASE}/${lang}.traineddata`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       mkdirSync(dir, { recursive: true });
@@ -147,10 +171,11 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
         // 抽不到文本 = 扫描件/图片型 → 按需 OCR(liteparse 自带引擎 + 按需下载的语言包)。
         if (opts.ocrTessdataDir) {
           try {
-            const langs = await ensureTraineddata(opts.ocrTessdataDir, ocrLangs);
+            const tessDir = join(opts.ocrTessdataDir, OCR_VARIANT); // 变体子目录,旧缓存自动失效
+            const langs = await ensureTraineddata(tessDir, ocrLangs);
             if (langs.length > 0) {
-              const ocrParsed = await getOcrParser(opts.ocrTessdataDir, langs).parse(buf);
-              const ocr = clip(ocrParsed.text.trim());
+              const ocrParsed = await getOcrParser(tessDir, langs).parse(buf);
+              const ocr = clip(densifyCjk(ocrParsed.text).trim());
               if (ocr.text) {
                 return textResult(ocr.text, {
                   path,
@@ -207,9 +232,12 @@ export const documentToolRisk: Readonly<Record<string, RiskLevel>> = {
 
 export const documentGuidelines = `## 文档提取
 - 需要理解某份文档(PDF/报告/合同等)的内容时,用 extract_document 抽成文本再读。
-- 扫描件/图片型 PDF 也用 extract_document —— 它会自动 OCR(首次会联网下载语言包,稍慢)。
-  **不要自己用 shell 调 tesseract/pdftotext/pdftoppm 等**:OCR 已内建,自己搞既慢又依赖用户机器装没装。
-- OCR 结果可能有个别错字,据此总结时心里有数;若实在识别不出会如实说明,别编造。
+- 扫描件/图片型 PDF 也用 extract_document —— 它已内建 OCR(自带引擎,首次会联网下载语言包,稍慢)。
+  **这就是本机能做到的 OCR 上限**:扫描件 OCR 难免有错字、表格/公章/花体尤其差,这是客观限制,不是工具没选对。
+  **严禁**再自己用 shell 调 tesseract / pdftotext / pdftoppm / pytesseract 等去"重试 OCR"——内建用的就是同一个 Tesseract,
+  你 shell 兜底只会更慢、更乱、还依赖用户机器装没装,结果不会更好。
+- 正确做法:就用 extract_document 这一次的结果,基于它能认出的部分如实总结;识别不清的地方明说"扫描件此处识别不清",
+  别为了凑完整去 shell 折腾,也别编造。
 - 大文档会被截断;若只关心局部,先 extract 看全貌,再按需结合其它工具定位。`;
 
 export { CAPABILITY as documentCapability };
