@@ -5,11 +5,16 @@
  *
  * 安全设计:
  * - 风险等级 Destructive,每次执行前必经用户审批
- * - 内置超时(默认 30s,可调)防挂起
- * - 基于 Node.js child_process.exec,不传 shell:true 之外的额外选项
+ * - 自管理超时(默认 30s,可调)+ **杀整个进程组**防挂起:
+ *   子进程以独立进程组(detached)启动,超时/中断时按进程组 kill,
+ *   连同 `sh -c "a | b"` 里的孙进程一起收掉。否则被卡住的孙进程(如等系统
+ *   授权的 crontab)会一直持着 stdout/stderr 的 pipe fd,使 Node 的 `close`
+ *   永不触发、Promise 永不 resolve —— 既超时不了也 abort 不掉(会话卡死)。
+ * - abort/超时后即便进程组顽固不死,也在宽限期后强制 resolve,绝不让 agent loop 永久挂起。
+ * - 基于 Node.js child_process.spawn(shell:true / 指定 bin)
  * - 结果截断防撑爆上下文(前 100KB stdout + 10KB stderr)
  */
-import { exec, execFile, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -20,6 +25,12 @@ const CAPABILITY: Capability = "shell";
 const MAX_STDOUT_CHARS = 100_000;
 const MAX_STDERR_CHARS = 10_000;
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** 进程内累积输出的硬上限(防失控命令吃爆内存;超出即停止追加,clip 仍会标截断)。 */
+const MAX_BUFFER_CHARS = 2 * MAX_STDOUT_CHARS;
+/** SIGTERM 后等多久再补 SIGKILL。 */
+const KILL_GRACE_MS = 2_000;
+/** 触发 kill 后,即便进程组没死透也最迟在此时限强制 resolve(避免卡死 agent loop)。 */
+const FORCE_RESOLVE_MS = KILL_GRACE_MS + 1_000;
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
   return { content: [{ type: "text", text }], details };
@@ -42,8 +53,8 @@ const execShellParams = Type.Object({
 });
 
 /**
- * shell 执行底座规格。**缺省(undefined)= 用宿主系统默认 shell**(/bin/sh 或 cmd.exe,即 node `exec` 行为)。
- * 指定 bin 时改走 `execFile(bin, [...args, command])` —— 用于随包打包的**跨平台 shell**,
+ * shell 执行底座规格。**缺省(undefined)= 用宿主系统默认 shell**(/bin/sh 或 cmd.exe,即 `spawn(cmd, {shell:true})` 行为)。
+ * 指定 bin 时改走 `spawn(bin, [...args, command])` —— 用于随包打包的**跨平台 shell**,
  * 让三平台命令行为一致([[akari-goal]] 的「exec_shell 跨平台底座」)。busybox 用 `{ bin, args: ["sh", "-c"] }`。
  */
 export interface ShellSpec {
@@ -52,15 +63,41 @@ export interface ShellSpec {
   readonly args: readonly string[];
 }
 
-/** 起一个子进程跑 command:有 ShellSpec 走指定 shell,否则回落系统默认 shell。 */
-function spawnShell(command: string, dir: string, timeout: number, shell?: ShellSpec): ChildProcess {
+const IS_WINDOWS = process.platform === "win32";
+
+/**
+ * 起一个子进程跑 command:有 ShellSpec 走指定 shell,否则回落系统默认 shell。
+ * posix 下用 `detached: true` 让子进程自成进程组(组长 pid = child.pid),
+ * 这样 {@link killTree} 能用负 pid 一次性收掉 `sh -c "a | b"` 派生的所有孙进程。
+ */
+function spawnShell(command: string, dir: string, shell?: ShellSpec): ChildProcess {
   const common = {
     cwd: dir,
-    timeout,
-    maxBuffer: 1024 * 1024, // 1MB 缓冲区,防爆但已做上层截断
+    detached: !IS_WINDOWS, // 自成进程组,便于整组 kill;Windows 无对应语义,靠 killTree 的 taskkill /T 兜
     env: { ...process.env, PATH: process.env.PATH }
   };
-  return shell ? execFile(shell.bin, [...shell.args, command], common) : exec(command, common);
+  return shell
+    ? spawn(shell.bin, [...shell.args, command], common)
+    : spawn(command, { ...common, shell: true });
+}
+
+/**
+ * 杀掉子进程**及其整个进程树/组**。
+ * posix:`process.kill(-pid, sig)` —— 负 pid 作用于以 child 为组长的整个进程组(含孙进程)。
+ * Windows:`taskkill /T /F` 递归杀进程树。pid 已不存在则静默忽略。
+ */
+function killTree(child: ChildProcess, sig: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid == null) return;
+  try {
+    if (IS_WINDOWS) {
+      spawn("taskkill", ["/pid", String(pid), "/T", "/F"]);
+    } else {
+      process.kill(-pid, sig);
+    }
+  } catch {
+    // 进程(组)已退出 / 已被回收 —— 无事可做
+  }
 }
 
 function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParams> {
@@ -76,26 +113,42 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
     const dir = cwd ?? homedir();
 
     return new Promise((resolve) => {
-      const child = spawnShell(command, dir, t, shell);
+      const child = spawnShell(command, dir, shell);
 
       let stdout = "";
       let stderr = "";
-
-      child.stdout?.on("data", (chunk: string) => {
-        stdout += chunk;
-      });
-
-      child.stderr?.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
-
-      // AbortSignal 支持:用户点"停止"时杀掉子进程
-      const onAbort = () => {
-        child.kill("SIGTERM");
+      let settled = false;
+      const timers = new Set<NodeJS.Timeout>();
+      const later = (ms: number, fn: () => void): void => {
+        const id = setTimeout(() => {
+          timers.delete(id);
+          fn();
+        }, ms);
+        timers.add(id);
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
 
-      child.on("close", (exitCode) => {
+      // 触发整组终止:先 SIGTERM,宽限后 SIGKILL,并设硬兜底强制 resolve。
+      // 即便孙进程卡在内核态(如等系统授权)收不掉,也绝不让本 Promise 永久挂起 —— 否则 agent loop 卡死。
+      const terminate = (note: string): void => {
+        killTree(child, "SIGTERM");
+        later(KILL_GRACE_MS, () => killTree(child, "SIGKILL"));
+        later(FORCE_RESOLVE_MS, () => finish(null, note));
+      };
+
+      child.stdout?.setEncoding("utf8");
+      child.stderr?.setEncoding("utf8");
+      child.stdout?.on("data", (chunk: string) => {
+        if (stdout.length < MAX_BUFFER_CHARS) stdout += chunk;
+      });
+      child.stderr?.on("data", (chunk: string) => {
+        if (stderr.length < MAX_BUFFER_CHARS) stderr += chunk;
+      });
+
+      const finish = (exitCode: number | null, note?: string): void => {
+        if (settled) return;
+        settled = true;
+        for (const id of timers) clearTimeout(id);
+        timers.clear();
         signal?.removeEventListener("abort", onAbort);
 
         const clippedStdout = clip(stdout, MAX_STDOUT_CHARS);
@@ -104,7 +157,7 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
         const parts: string[] = [];
         if (clippedStdout.text) parts.push(`stdout:\n${clippedStdout.text}`);
         if (clippedStderr.text) parts.push(`stderr:\n${clippedStderr.text}`);
-        parts.push(`退出码: ${exitCode ?? "(超时/被杀)"}`);
+        parts.push(`退出码: ${exitCode ?? (note ?? "(超时/被杀)")}`);
 
         resolve(
           textResult(parts.join("\n\n"), {
@@ -114,12 +167,26 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
             stdoutTruncated: clippedStdout.truncated,
             stderrTruncated: clippedStderr.truncated,
             cwd: dir,
-            command
+            command,
+            ...(note ? { note } : {})
           })
         );
-      });
+      };
+
+      // 自管理超时:杀整个进程组(连孙进程),而非只杀直接子进程。
+      later(t, () => terminate("(超时,已终止进程组)"));
+
+      // AbortSignal 支持:用户点"停止"时终止整组
+      const onAbort = () => terminate("(已中断)");
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      child.on("close", (exitCode) => finish(exitCode));
 
       child.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        for (const id of timers) clearTimeout(id);
+        timers.clear();
         signal?.removeEventListener("abort", onAbort);
         resolve(
           textResult(`执行失败: ${err.message}`, {

@@ -107,3 +107,55 @@ describe("createShellTools 可插拔 shell 底座", () => {
     expect(r.details.exitCode).toBe(3);
   });
 });
+
+describe("exec_shell 超时/中断必须能终止且 resolve(防会话卡死回归)", () => {
+  const runWith = (
+    command: string,
+    opts: { timeout?: number; signal?: AbortSignal }
+  ) =>
+    createShellTools()[0]!.execute(
+      "id",
+      { command, timeout: opts.timeout },
+      opts.signal as never
+    ) as Promise<{
+      content: { type: string; text: string }[];
+      details: { exitCode: number | null; note?: string };
+    }>;
+
+  it("超时会杀掉长跑命令并以 exitCode=null resolve(不无限挂起)", async () => {
+    const started = Date.now();
+    const r = await runWith("sleep 10", { timeout: 300 });
+    // 远早于 10s 就返回,说明超时真正生效
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(r.details.exitCode).toBeNull();
+  }, 10_000);
+
+  it("abort 会杀掉长跑命令并 resolve(进程组干净退出 → exitCode=null)", async () => {
+    const ctrl = new AbortController();
+    const p = runWith("sleep 10", { signal: ctrl.signal });
+    setTimeout(() => ctrl.abort(), 100);
+    const started = Date.now();
+    const r = await p;
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(r.details.exitCode).toBeNull();
+  }, 10_000);
+
+  it("abort 收掉管道里的孙进程(整组终止,而非只杀 sh)", async () => {
+    // `sleep 10 | cat`:sleep 是 sh 的孙进程。旧实现只杀 sh,sleep 存活并持着 pipe
+    // → close 永不触发 → Promise 永挂。整组 kill 后必须快速 resolve。
+    const ctrl = new AbortController();
+    const p = runWith("sleep 10 | cat", { signal: ctrl.signal });
+    setTimeout(() => ctrl.abort(), 100);
+    const started = Date.now();
+    const r = await p;
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(r.details.exitCode).toBeNull();
+  }, 10_000);
+
+  it("正常快命令不受影响,如实返回 exitCode=0", async () => {
+    const ctrl = new AbortController();
+    const r = await runWith("echo done", { signal: ctrl.signal });
+    expect(r.details.exitCode).toBe(0);
+    expect(r.content[0]!.text).toContain("done");
+  });
+});
