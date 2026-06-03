@@ -8,10 +8,9 @@ import { SourceReader } from "./SourceReader";
  * 左栏 = 知识库树(库 → 展开看来源);右栏 = 选中来源的逐页全文。
  * 增删来源:UI 选文件/拖入(→ 抽取入库)或在对话里让 agent 加;经 notebook:changed 实时同步。
  */
-/** 绝对路径 → file:// URL(逐段编码,处理空格/特殊字符);PDF 可带 #page=N 跳页。 */
-function toFileUrl(path: string, page?: number): string {
-  const url = "file://" + path.split("/").map(encodeURIComponent).join("/");
-  return page ? `${url}#page=${page}` : url;
+/** 绝对路径 → file:// URL(逐段编码,处理空格/特殊字符)。 */
+function toFileUrl(path: string): string {
+  return "file://" + path.split("/").map(encodeURIComponent).join("/");
 }
 
 export function NotebookManager({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }): JSX.Element {

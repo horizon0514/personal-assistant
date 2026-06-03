@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, HelpCircle, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, BookOpen, Check, HelpCircle, Paperclip, Plus, Square, X } from "lucide-react";
 import { Markdown } from "./Markdown";
 import { TurnTrace, type ActionRow, type StepGroup } from "./StepTrace";
 import { EmptyState } from "./EmptyState";
 import { useShell } from "../shell/store";
+import type { NotebookView } from "../../../../preload";
 
 type MsgItem = { kind: "msg"; id: string; role: "user" | "assistant"; content: string };
 type StepItem = { kind: "step" } & StepGroup;
@@ -77,9 +78,13 @@ function argSummary(tool: string, args: unknown): string {
 
 /** 会话面板:消息流 + 内联执行轨迹(step,审批/撤销内联到对应 action 行) */
 export function ChatPane(): JSX.Element {
-  const { activeSessionId, ensureSession, openArtifact } = useShell();
+  const { activeSessionId, activeWorkspaceId, ensureSession, openArtifact } = useShell();
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [input, setInput] = useState("");
+  // 绑定的知识库:选定后随每条消息带给 agent,本对话默认在该库内检索/作答;""=未绑定。
+  const [boundNotebook, setBoundNotebook] = useState("");
+  const [notebooks, setNotebooks] = useState<NotebookView[]>([]);
+  const [nbPickerOpen, setNbPickerOpen] = useState(false);
   // 拖入的附件:{ 显示名, 本地源路径 };发送时 main 会拷进会话附件目录并把绝对路径喂 agent。
   const [attachments, setAttachments] = useState<{ name: string; path: string }[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -111,6 +116,26 @@ export function ChatPane(): JSX.Element {
     }
     void window.pa.session.open(activeSessionId).then((loaded) => setItems(loaded as TimelineItem[]));
   }, [activeSessionId]);
+
+  // 知识库清单(供绑定选择器);库增删时实时刷新。
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    void window.pa.notebook.list(activeWorkspaceId).then(setNotebooks);
+    return window.pa.notebook.onChanged((p) => {
+      if (p.wsId === activeWorkspaceId) setNotebooks(p.notebooks);
+    });
+  }, [activeWorkspaceId]);
+
+  // 切换会话:重置绑定(绑定按对话计;主进程绑定映射按 sessionId,随下次发送覆盖)。
+  useEffect(() => {
+    setBoundNotebook("");
+    setNbPickerOpen(false);
+  }, [activeSessionId]);
+
+  // 绑定的库若被删/改名(已不在清单里),自动解绑,避免指向空库。
+  useEffect(() => {
+    if (boundNotebook && !notebooks.some((n) => n.name === boundNotebook)) setBoundNotebook("");
+  }, [notebooks, boundNotebook]);
 
   // 流式消息
   useEffect(() => {
@@ -301,6 +326,14 @@ export function ChatPane(): JSX.Element {
     if (next.length) setAttachments((prev) => [...prev, ...next]);
   };
   const removeAttachment = (i: number): void => setAttachments((prev) => prev.filter((_, idx) => idx !== i));
+  // 「+」菜单 →「添加附件」:系统选择框选文件,追加到附件区(与拖入同一套)。
+  const pickAttachments = (): void => {
+    setNbPickerOpen(false);
+    void window.pa.files.pick().then((paths) => {
+      const next = paths.map((p) => ({ name: p.split("/").pop() || p, path: p })).filter((a) => a.path);
+      if (next.length) setAttachments((prev) => [...prev, ...next]);
+    });
+  };
 
   const send = (textArg?: string): void => {
     const text = (textArg ?? input).trim();
@@ -339,7 +372,8 @@ export function ChatPane(): JSX.Element {
     setStreaming(true);
     setReviewState("idle"); // 若是在自查/返工期发的:本轮验收即将被后端打断,先把指示器收掉
     const paths = atts.map((a) => a.path);
-    void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text, paths.length ? paths : undefined));
+    const nb = boundNotebook || undefined;
+    void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text, paths.length ? paths : undefined, nb));
   };
 
   const stop = (): void => {
@@ -426,6 +460,24 @@ export function ChatPane(): JSX.Element {
 
       <div className="shrink-0">
         <div className="mx-auto w-full max-w-[760px] px-4 pb-5 pt-2">
+          {boundNotebook && (
+            <div className="no-drag mb-1.5 flex">
+              <span
+                className="flex items-center gap-1.5 rounded-lg bg-ember-50 py-1 pl-2 pr-1 text-[12px] font-medium text-ember-700 ring-1 ring-ember-500/20 dark:bg-ember-500/10 dark:text-ember-200"
+                title={`本对话基于知识库「${boundNotebook}」作答并带引用`}
+              >
+                <BookOpen size={12} className="shrink-0" />
+                <span className="max-w-[220px] truncate">知识库 · {boundNotebook}</span>
+                <button
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ember-600/70 transition hover:bg-ember-100 hover:text-ember-700 dark:hover:bg-ember-500/20"
+                  onClick={() => setBoundNotebook("")}
+                  aria-label="解绑知识库"
+                >
+                  <X size={11} strokeWidth={2.5} />
+                </button>
+              </span>
+            </div>
+          )}
           {attachments.length > 0 && (
             <div className="no-drag mb-1.5 flex flex-wrap gap-1.5">
               {attachments.map((a, i) => (
@@ -448,6 +500,57 @@ export function ChatPane(): JSX.Element {
             </div>
           )}
           <div className="no-drag flex items-end gap-2 rounded-xl border border-stone-200 bg-white p-2 transition focus-within:border-ember-400 focus-within:ring-2 focus-within:ring-ember-500/15 dark:border-white/10 dark:bg-ink-900 dark:focus-within:border-ember-500/60 dark:focus-within:ring-ember-500/20">
+            {/* 「+」菜单:添加附件 / 绑定知识库 */}
+            <div className="relative self-end">
+              <button
+                className={
+                  "flex h-8 w-8 items-center justify-center rounded-lg text-stone-500 transition hover:bg-stone-100 dark:hover:bg-ink-800 " +
+                  (nbPickerOpen ? "bg-stone-100 dark:bg-ink-800" : "")
+                }
+                onClick={() => setNbPickerOpen((o) => !o)}
+                aria-label="添加"
+                title="附件 / 知识库"
+              >
+                <Plus size={18} strokeWidth={2.2} />
+              </button>
+              {nbPickerOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setNbPickerOpen(false)} />
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-60 overflow-hidden rounded-xl border border-stone-200 bg-white py-1 shadow-xl dark:border-white/10 dark:bg-ink-900">
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-[12.5px] text-stone-700 transition hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-ink-800"
+                      onClick={pickAttachments}
+                    >
+                      <Paperclip size={14} className="shrink-0 text-stone-400" />
+                      添加附件
+                    </button>
+                    <div className="my-1 border-t border-stone-100 dark:border-white/5" />
+                    <div className="px-3 pb-1 pt-0.5 text-[11px] font-medium text-stone-400">知识库</div>
+                    {notebooks.length === 0 ? (
+                      <div className="px-3 py-1.5 text-[12px] text-stone-400">还没有知识库</div>
+                    ) : (
+                      <div className="max-h-52 overflow-auto">
+                        {notebooks.map((nb) => (
+                          <button
+                            key={nb.id}
+                            className="flex w-full items-center gap-2 px-3 py-1.5 text-[12.5px] text-stone-700 transition hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-ink-800"
+                            onClick={() => {
+                              setBoundNotebook(nb.name === boundNotebook ? "" : nb.name);
+                              setNbPickerOpen(false);
+                            }}
+                          >
+                            <BookOpen size={14} className="shrink-0 text-stone-400" />
+                            <span className="min-w-0 flex-1 truncate text-left">{nb.name}</span>
+                            <span className="shrink-0 text-[11px] text-stone-400">{nb.sourceCount}</span>
+                            {nb.name === boundNotebook && <Check size={14} className="shrink-0 text-ember-500" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
             <textarea
               ref={inputRef}
               rows={1}

@@ -44,8 +44,10 @@ export function registerIpc(): void {
 
   // Conversation
   ipcMain.handle("chat:model", () => agent.modelLabel());
-  ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[] }) =>
-    void agent.send(e.sender, p.sessionId, p.text, p.attachments)
+  ipcMain.on(
+    "chat:send",
+    (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[]; notebook?: string }) =>
+      void agent.send(e.sender, p.sessionId, p.text, p.attachments, p.notebook)
   );
   ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 
@@ -119,19 +121,19 @@ export function registerIpc(): void {
   ipcMain.handle("notebook:removeSource", (_e, p: { wsId: string; notebook: string; ref: string }) =>
     agent.removeNotebookSource(p.wsId, p.notebook, p.ref)
   );
-  ipcMain.handle("notebook:pickFiles", () => pickNotebookFiles());
-}
-
-/** 系统文件选择框:选要加入知识库的文档(PDF/纯文本类),返回绝对路径数组(取消则空)。 */
-async function pickNotebookFiles(): Promise<string[]> {
-  const res = await dialog.showOpenDialog({
-    title: "选择要加入知识库的文档",
-    properties: ["openFile", "multiSelections"],
-    filters: [
+  // 知识库导入:限文档类型;聊天「+」菜单的「添加附件」:不限类型。共用一个多选选择框。
+  ipcMain.handle("notebook:pickFiles", () =>
+    pickFiles("选择要加入知识库的文档", [
       { name: "支持的文档", extensions: ["pdf", "txt", "md", "markdown", "csv", "tsv", "json", "log", "xml", "yaml", "yml"] },
       { name: "PDF", extensions: ["pdf"] },
       { name: "全部文件", extensions: ["*"] }
-    ]
-  });
+    ])
+  );
+  ipcMain.handle("dialog:pickFiles", () => pickFiles("选择文件"));
+}
+
+/** 系统文件选择框(多选),返回绝对路径数组(取消则空);filters 不传=不限类型。 */
+async function pickFiles(title: string, filters?: Electron.FileFilter[]): Promise<string[]> {
+  const res = await dialog.showOpenDialog({ title, properties: ["openFile", "multiSelections"], filters });
   return res.canceled ? [] : res.filePaths;
 }

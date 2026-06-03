@@ -211,6 +211,9 @@ const turnGuidelineBySession = new Map<string, string>();
 // 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
 // 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
 const turnAttachmentsBySession = new Map<string, string[]>();
+// 每会话「绑定的知识库名」(渲染层选定后随每条消息带上,跨轮粘住;contextProvider 按轮注入,
+// 让本对话默认在该库内检索/作答,免得用户每句都报库名)。空/未设=不绑定。
+const boundNotebookBySession = new Map<string, string>();
 
 /** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
 function renderTurnAttachments(paths: string[] | undefined): string | undefined {
@@ -219,6 +222,28 @@ function renderTurnAttachments(paths: string[] | undefined): string | undefined 
     "## 本轮附件(用户随这条消息拖入,已存到本地)",
     "需要其内容时用 extract_document(PDF/文本)按下列绝对路径读取,别让用户再贴一遍:",
     ...paths.map((p) => `- ${p}`)
+  ].join("\n");
+}
+
+/**
+ * 把「本对话绑定的知识库」渲染成给 agent 的上下文块。
+ * 库不存在(被删/改名)→ undefined,不注入,避免误导模型去搜一个空库。
+ */
+function renderBoundNotebook(name: string | undefined, wsId: string): string | undefined {
+  if (!name) return undefined;
+  const nb = getNotebook(wsId).getNotebook(name);
+  if (!nb) return undefined;
+  const list = nb.sources.length
+    ? nb.sources.map((s) => `- ${s.name}(${s.pageCount} 页${s.error ? "、⚠ 未识别" : ""})`).join("\n")
+    : "(暂无来源)";
+  return [
+    `## 当前对话已绑定知识库「${nb.name}」`,
+    "用户在此对话里的提问,默认就是问这个知识库——除非用户明确转向别处:",
+    "- 优先用 notebook_search / notebook_read_source 在本库内检索、读原文,据此作答并标页码引用(如 [xx.pdf, p.3])。",
+    "- 只依据本库来源,别用先验知识硬补;库里确实没有就直说,并说明搜了哪些词。",
+    "- 用户说「加这份 / 收进来」时,notebook_add_source 默认加到本库。",
+    `本库现有来源(${nb.sourceCount} 份):`,
+    list
   ].join("\n");
 }
 
@@ -529,6 +554,7 @@ function buildAdapter(
         turnGuidelineBySession.get(sessionId),
         // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
         renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
+        renderBoundNotebook(boundNotebookBySession.get(sessionId), wsId),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -648,6 +674,7 @@ export const agent = {
     recentBySession.clear();
     turnGuidelineBySession.clear();
     turnAttachmentsBySession.clear();
+    boundNotebookBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -698,7 +725,7 @@ export const agent = {
     broadcast("session:changed", sessions.list());
   },
 
-  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[]): Promise<void> {
+  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[], notebook?: string): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
@@ -719,6 +746,9 @@ export const agent = {
       }
     }
     turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
+    // 绑定的知识库:渲染层每轮带上,粘住直到用户解绑(传空)。
+    if (notebook && notebook.trim()) boundNotebookBySession.set(sessionId, notebook.trim());
+    else boundNotebookBySession.delete(sessionId);
     const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
 
     let instance: PiAgentAdapter;

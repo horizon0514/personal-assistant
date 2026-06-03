@@ -155,11 +155,13 @@ const api = {
   },
   /** 拖入文件:在渲染层从 File 对象取其本地绝对路径(Electron 33 起 File.path 已移除,须用 webUtils)。 */
   files: {
-    pathForDropped: (file: File): string => webUtils.getPathForFile(file)
+    pathForDropped: (file: File): string => webUtils.getPathForFile(file),
+    /** 系统文件选择框:选任意文件作为聊天附件,返回绝对路径数组(取消则空)。 */
+    pick: (): Promise<string[]> => ipcRenderer.invoke("dialog:pickFiles")
   },
   chat: {
-    send: (sessionId: string, text: string, attachments?: string[]): void =>
-      ipcRenderer.send("chat:send", { sessionId, text, attachments }),
+    send: (sessionId: string, text: string, attachments?: string[], notebook?: string): void =>
+      ipcRenderer.send("chat:send", { sessionId, text, attachments, notebook }),
     /** 停止当前会话正在进行的运行 */
     stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
