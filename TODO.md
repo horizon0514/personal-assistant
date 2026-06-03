@@ -105,7 +105,7 @@
 > 定位:把"读完即弃"升级成"对一组资料持续问答、带引用"。**复用 agentic 检索,不上向量**(是上条决策的延伸,非例外);落在 status §5 #5「调研→产出」的输入侧。Notebook 对标 Personal Memory(本地、可见可恢复、每 workspace 一份),非无状态 Capability。
 
 - [x] **M0 接地抽取**:`cap-document` 加结构化抽取,导出可复用 `extractDocument()`(保逐页 `PageText[]`,数字版用 `pages[].text`、扫描件逐页 OCR);`extract_document` 扁平输出对多页 PDF 加「第 N 页」锚 → 引用接地的地基。(2026-06-03)
-- [ ] **M1 Notebook 领域+持久化**:新 `packages/ctx-notebook`,manifest + 逐页文本缓存(抽过即存,免重跑 OCR),每 workspace 一份;`notebook_add_source`/`list`/`remove`(增删=本地 manifest,可见可逆,软删留痕)。
+- [x] **M1 Notebook 领域+持久化**:新 `packages/ctx-notebook`(领域类型 + `NotebookStore` + 三工具),每 workspace 一个 `notebooks/<id>.json`(逐页文本缓存,抽过即存、免重跑 OCR);`notebook_add_source`(抽取器由组合根注入,与 cap-document 解耦;同 path 不重抽)/`notebook_list`(列库或列来源)/`notebook_remove_source`(软删留痕)。domain-core 加 `notebook` 能力、infra 加 `notebooksDir`、agent.ts 接线(catalog alwaysOn + 视同 ReadOnly + guideline)。8 单测。(2026-06-03)
 - [ ] **M2 范围问答+引用**:`notebook_search`(缓存文本关键词检索,回 `来源:页:片段`)+ `notebook_read_source`;接地约束进 `notebookGuidelines`(只基于来源、每论断标 `[来源, p.X]`、找不到就说找不到);独立 evaluator 加"每论断须有来源支撑"验收。**现有聊天框即可端到端**。
 - [ ] **M3 UI**:Notebook 视图(来源列表 + 问答区 + 引用跳回原文),复用三栏 + ArtifactPanel。
 - [ ] **M4(以后/可选)**:关键词搜不动、需语义相似时再上 embedding —— 严守"按需再做"。

@@ -80,4 +80,9 @@ export class WorkspaceStore {
   memoryPath(id: string): string {
     return join(this.dir(id), "memory.json");
   }
+
+  /** 该 workspace 的 Notebook(来源集)目录:每个 notebook 一份 <id>.json,含逐页文本缓存。 */
+  notebooksDir(id: string): string {
+    return join(this.dir(id), "notebooks");
+  }
 }

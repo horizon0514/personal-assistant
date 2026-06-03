@@ -39,7 +39,8 @@ import {
   filesystemToolRisk,
   type FileChangeOp
 } from "@pa/cap-filesystem";
-import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines } from "@pa/cap-document";
+import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines, extractDocument } from "@pa/cap-document";
+import { NotebookStore, createNotebookTools, notebookToolNames, notebookGuidelines } from "@pa/ctx-notebook";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
@@ -89,6 +90,7 @@ const capabilityByTool = new Map<string, Capability>();
 for (const t of memoryToolNames) capabilityByTool.set(t, "memory");
 for (const t of filesystemToolNames) capabilityByTool.set(t, "filesystem");
 for (const t of documentToolNames) capabilityByTool.set(t, "document");
+for (const t of notebookToolNames) capabilityByTool.set(t, "notebook");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 for (const t of shellToolNames) capabilityByTool.set(t, "shell");
 capabilityByTool.set(searchHistoryToolName, "memory"); // 跨对话回忆,归入记忆能力
@@ -170,6 +172,10 @@ const CAPABILITY_DESCRIPTIONS = [
   },
   { name: "document", summary: "本地文档抽取(PDF / 纯文本类)成纯文本以便阅读总结。" },
   {
+    name: "notebook",
+    summary: "知识库(来源集):把若干本地文档攒进一个库并缓存逐页文本,便于基于这批资料反复问答;可新建/加入/查看/移出来源。详见下方「知识库」指南。"
+  },
+  {
     name: "browser",
     summary: "内置浏览器调研与操作:搜索、抓正文(可后台并发)、可见面板打开/读当前、点击/输入/截图。详见下方「网页调研」「网页操作」指南。"
   },
@@ -244,6 +250,16 @@ function getMemory(wsId: string): MemoryStore {
   if (!s) {
     s = new MemoryStore(workspaces.memoryPath(wsId));
     memoryStores.set(wsId, s);
+  }
+  return s;
+}
+
+const notebookStores = new Map<string, NotebookStore>();
+function getNotebook(wsId: string): NotebookStore {
+  let s = notebookStores.get(wsId);
+  if (!s) {
+    s = new NotebookStore(workspaces.notebooksDir(wsId));
+    notebookStores.set(wsId, s);
   }
   return s;
 }
@@ -357,12 +373,15 @@ function buildAdapter(
   const memory = getMemory(wsId);
   const model = createModel({ provider: PROVIDER, modelId: MODEL });
   // 文档工具:OCR 是基础能力,模型缓存目录固定注入;onProgress 把"正在识别/下载"亮到 step 行。
-  const documentTools = createDocumentTools({
-    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
-    onProgress: (actionId, note) => {
-      if (!background) sendTo("step:progress", { actionId, note });
-    }
-  });
+  const ocrModelDir = join(app.getPath("userData"), "paddleocr");
+  const onDocProgress = (actionId: string, note: string): void => {
+    if (!background) sendTo("step:progress", { actionId, note });
+  };
+  const documentTools = createDocumentTools({ ocrModelDir, onProgress: onDocProgress });
+  // 知识库(来源集):入库复用 cap-document 的抽取器(注入,保持 ctx-notebook 与 cap 解耦);每 workspace 一份。
+  const notebookTools = createNotebookTools(getNotebook(wsId), (path, actionId) =>
+    extractDocument(path, { ocrModelDir, onProgress: onDocProgress }, actionId)
+  );
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -376,6 +395,13 @@ function buildAdapter(
       capability: "document",
       alwaysOn: true,
       tools: documentTools
+    },
+    {
+      // 知识库:add/list/remove(增删=本地 manifest,可见可逆)。alwaysOn 保证模型知道有此能力,
+      // 不致退化成每次重新 extract_document。基于库内容的检索/带引用问答在后续版本(M2)。
+      capability: "notebook",
+      alwaysOn: true,
+      tools: notebookTools
     },
     {
       capability: "memory",
@@ -468,7 +494,14 @@ function buildAdapter(
       capabilities: CAPABILITY_DESCRIPTIONS,
       // 只放 always-on 能力的 guideline(每轮都在,留冻结=零缓存损失)。browser/schedule 均为 always-on,故其指南也在此。
       // 仍 gated 的能力(仅 shell)的 guideline 挂在 catalog 上,随 selectTools 经 contextProvider 按轮注入。
-      guidelines: [filesystemGuidelines, documentGuidelines, memoryGuidelines, browserGuidelines, scheduleGuidelines]
+      guidelines: [
+        filesystemGuidelines,
+        documentGuidelines,
+        notebookGuidelines,
+        memoryGuidelines,
+        browserGuidelines,
+        scheduleGuidelines
+      ]
     }),
     thinkingLevel: "high",
     // 初始挂全集;每条用户消息进来前会被 selectTools 重新设置为本轮子集(send 里)。
@@ -503,7 +536,8 @@ function buildAdapter(
           call.tool === "use_skill" ||
           call.tool === searchHistoryToolName || // 跨对话回忆,只读
           scheduleToolNames.has(call.tool) || // 定时任务增删改:可见(面板+聊天回报)、可逆,自动跑不弹审批
-          memoryToolNames.has(call.tool)
+          memoryToolNames.has(call.tool) ||
+          notebookToolNames.has(call.tool) // 知识库增删:本地 manifest、可见、软删可恢复,自动执行不弹审批
         )
           return "ReadOnly";
         // exec_shell 风险取决于命令内容:纯只读自动跑,写/改/拿不准的走审批。
@@ -598,6 +632,7 @@ export const agent = {
   deleteWorkspace(wsId: string): { workspaces: WorkspaceRecord[]; activeWorkspaceId: string } {
     workspaces.remove(wsId);
     memoryStores.delete(wsId);
+    notebookStores.delete(wsId);
     sessionStores.delete(wsId);
     adapters.clear(); // 简单起见全清,下次按需从磁盘 transcript 重建
     selectorsBySession.clear();
