@@ -141,6 +141,9 @@ const api = {
     listArchived: (): Promise<SessionRecord[]> => ipcRenderer.invoke("session:listArchived"),
     /** 恢复归档会话(重回活跃列表) */
     unarchive: (sessionId: string): Promise<void> => ipcRenderer.invoke("session:unarchive", sessionId),
+    /** 绑定/解绑会话的知识库(notebook 传空=解绑);持久化到会话记录 */
+    bindNotebook: (sessionId: string, notebook?: string): Promise<void> =>
+      ipcRenderer.invoke("session:bindNotebook", { sessionId, notebook }),
     /** 会话列表变化(如自动命名/落盘后) */
     onChanged: (cb: (sessions: SessionRecord[]) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, payload: SessionRecord[]): void => cb(payload);
@@ -160,8 +163,8 @@ const api = {
     pick: (): Promise<string[]> => ipcRenderer.invoke("dialog:pickFiles")
   },
   chat: {
-    send: (sessionId: string, text: string, attachments?: string[], notebook?: string): void =>
-      ipcRenderer.send("chat:send", { sessionId, text, attachments, notebook }),
+    send: (sessionId: string, text: string, attachments?: string[]): void =>
+      ipcRenderer.send("chat:send", { sessionId, text, attachments }),
     /** 停止当前会话正在进行的运行 */
     stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),

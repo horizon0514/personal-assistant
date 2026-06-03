@@ -211,9 +211,6 @@ const turnGuidelineBySession = new Map<string, string>();
 // 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
 // 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
 const turnAttachmentsBySession = new Map<string, string[]>();
-// 每会话「绑定的知识库名」(渲染层选定后随每条消息带上,跨轮粘住;contextProvider 按轮注入,
-// 让本对话默认在该库内检索/作答,免得用户每句都报库名)。空/未设=不绑定。
-const boundNotebookBySession = new Map<string, string>();
 
 /** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
 function renderTurnAttachments(paths: string[] | undefined): string | undefined {
@@ -554,7 +551,7 @@ function buildAdapter(
         turnGuidelineBySession.get(sessionId),
         // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
         renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
-        renderBoundNotebook(boundNotebookBySession.get(sessionId), wsId),
+        renderBoundNotebook(getSessions(wsId).get(sessionId)?.boundNotebook, wsId),
         memory.render(),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
@@ -674,7 +671,6 @@ export const agent = {
     recentBySession.clear();
     turnGuidelineBySession.clear();
     turnAttachmentsBySession.clear();
-    boundNotebookBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -716,6 +712,12 @@ export const agent = {
     getSessions(activeWorkspaceId).setArchived(sessionId, true);
     if (activeSessionId === sessionId) activeSessionId = "";
   },
+  /** 绑定/解绑会话的知识库(持久化到会话记录;广播 session:changed 让渲染层刷新展示)。 */
+  setBoundNotebook(sessionId: string, notebook?: string): void {
+    const sessions = getSessions(activeWorkspaceId);
+    sessions.setBoundNotebook(sessionId, notebook);
+    broadcast("session:changed", sessions.list());
+  },
   /** 当前 workspace 的已归档会话(供"已归档"列表查看/恢复)。 */
   listArchivedSessions: (): SessionRecord[] => getSessions(activeWorkspaceId).listArchived(),
   /** 恢复归档会话:重回活跃列表(广播 session:changed 让渲染层刷新)。 */
@@ -725,7 +727,7 @@ export const agent = {
     broadcast("session:changed", sessions.list());
   },
 
-  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[], notebook?: string): Promise<void> {
+  async send(sender: WebContents, sessionId: string, text: string, attachments?: string[]): Promise<void> {
     activeSender = sender;
     activeSessionId = sessionId;
     plansBySession.delete(sessionId); // 新任务从无计划开始;本轮若对齐由 propose_plan 重新写入
@@ -746,9 +748,6 @@ export const agent = {
       }
     }
     turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
-    // 绑定的知识库:渲染层每轮带上,粘住直到用户解绑(传空)。
-    if (notebook && notebook.trim()) boundNotebookBySession.set(sessionId, notebook.trim());
-    else boundNotebookBySession.delete(sessionId);
     const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
 
     let instance: PiAgentAdapter;

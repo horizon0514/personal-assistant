@@ -24,6 +24,11 @@ export interface SessionRecord {
    * 会话在处理后又有新内容(或从未处理过)——客户端重启时据此补跑漏掉的(如退出前没"离开")。
    */
   digestedAt?: number;
+  /**
+   * 本会话绑定的知识库名(NotebookLM 式「待在某个库里问答」)。会话级、持久化:
+   * 重开会话/重启后仍在。空/未设=未绑定。设定走 setBoundNotebook,渲染层从会话记录读取展示。
+   */
+  boundNotebook?: string;
 }
 
 export class SessionStore {
@@ -126,6 +131,23 @@ export class SessionStore {
       rec.updatedAt = this.tick();
       this.persist();
     }
+  }
+
+  /** 单条会话记录(按 id);无则 undefined。 */
+  get(id: string): SessionRecord | undefined {
+    return this.records.find((r) => r.id === id);
+  }
+
+  /**
+   * 绑定/解绑本会话的知识库(name 空=解绑)。**不**碰 updatedAt——绑定是配置而非活动,
+   * 不该把会话顶到列表最前。
+   */
+  setBoundNotebook(id: string, name?: string): void {
+    const rec = this.records.find((r) => r.id === id);
+    if (!rec) return;
+    if (name && name.trim()) rec.boundNotebook = name.trim();
+    else delete rec.boundNotebook;
+    this.persist();
   }
 
   /** 加载 transcript;无则返回 undefined(新会话或文件缺失)。 */

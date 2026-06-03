@@ -30,6 +30,9 @@ export function registerIpc(): void {
   ipcMain.handle("session:archive", (_e, sessionId: string) => agent.archiveSession(sessionId));
   ipcMain.handle("session:listArchived", () => agent.listArchivedSessions());
   ipcMain.handle("session:unarchive", (_e, sessionId: string) => agent.unarchiveSession(sessionId));
+  ipcMain.handle("session:bindNotebook", (_e, p: { sessionId: string; notebook?: string }) =>
+    agent.setBoundNotebook(p.sessionId, p.notebook)
+  );
 
   // Secret:BYO API Key(全局)
   ipcMain.handle("secret:apiKeyStatus", () => agent.apiKeyStatus());
@@ -44,10 +47,8 @@ export function registerIpc(): void {
 
   // Conversation
   ipcMain.handle("chat:model", () => agent.modelLabel());
-  ipcMain.on(
-    "chat:send",
-    (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[]; notebook?: string }) =>
-      void agent.send(e.sender, p.sessionId, p.text, p.attachments, p.notebook)
+  ipcMain.on("chat:send", (e: IpcMainEvent, p: { sessionId: string; text: string; attachments?: string[] }) =>
+    void agent.send(e.sender, p.sessionId, p.text, p.attachments)
   );
   ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 

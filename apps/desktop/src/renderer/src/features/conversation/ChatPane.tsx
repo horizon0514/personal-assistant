@@ -78,10 +78,11 @@ function argSummary(tool: string, args: unknown): string {
 
 /** 会话面板:消息流 + 内联执行轨迹(step,审批/撤销内联到对应 action 行) */
 export function ChatPane(): JSX.Element {
-  const { activeSessionId, activeWorkspaceId, ensureSession, openArtifact } = useShell();
+  const { activeSessionId, activeWorkspaceId, sessions, ensureSession, openArtifact } = useShell();
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [input, setInput] = useState("");
-  // 绑定的知识库:选定后随每条消息带给 agent,本对话默认在该库内检索/作答;""=未绑定。
+  // 绑定的知识库:真值是持久化的会话记录(SessionRecord.boundNotebook),这里是它的 UI 镜像——
+  // 切换会话时从记录同步,改动时经 session.bindNotebook 写回。""=未绑定。
   const [boundNotebook, setBoundNotebook] = useState("");
   const [notebooks, setNotebooks] = useState<NotebookView[]>([]);
   const [nbPickerOpen, setNbPickerOpen] = useState(false);
@@ -103,18 +104,24 @@ export function ChatPane(): JSX.Element {
   const revertedIds = new Set(journal.filter((e) => e.reverted).map((e) => e.actionId));
   const undoableId = [...journal].reverse().find((e) => !e.reverted)?.actionId;
 
-  // 切换会话:载入持久化 timeline(空 id → 清空)
+  // 切换会话:载入持久化 timeline + 同步绑定的知识库(空 id → 清空)
   useEffect(() => {
+    setNbPickerOpen(false);
     if (!activeSessionId) {
       setItems([]);
+      setBoundNotebook("");
       return;
     }
-    // 发送时刚创建的会话:磁盘还没 transcript,重载会清掉乐观消息与流式内容,跳过这一次
+    // 发送时刚创建的会话:磁盘还没 transcript,且绑定已在 send 里写好——跳过重载/同步,
+    // 别清掉乐观消息、流式内容与预选的绑定。
     if (sentIntoNewSession.current) {
       sentIntoNewSession.current = false;
       return;
     }
     void window.pa.session.open(activeSessionId).then((loaded) => setItems(loaded as TimelineItem[]));
+    setBoundNotebook(sessions.find((s) => s.id === activeSessionId)?.boundNotebook ?? "");
+    // 只随 activeSessionId 同步,不随 sessions 刷新——避免写回触发的 session:changed 冲掉编辑中的镜像。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId]);
 
   // 知识库清单(供绑定选择器);库增删时实时刷新。
@@ -126,16 +133,17 @@ export function ChatPane(): JSX.Element {
     });
   }, [activeWorkspaceId]);
 
-  // 切换会话:重置绑定(绑定按对话计;主进程绑定映射按 sessionId,随下次发送覆盖)。
-  useEffect(() => {
-    setBoundNotebook("");
-    setNbPickerOpen(false);
-  }, [activeSessionId]);
+  // 选定/解绑知识库:更新 UI 镜像;有会话则即时写回持久化记录(无会话时由 send 在建会话后补写)。
+  const bindNotebook = (name: string): void => {
+    setBoundNotebook(name);
+    if (activeSessionId) void window.pa.session.bindNotebook(activeSessionId, name || undefined);
+  };
 
   // 绑定的库若被删/改名(已不在清单里),自动解绑,避免指向空库。
   useEffect(() => {
-    if (boundNotebook && !notebooks.some((n) => n.name === boundNotebook)) setBoundNotebook("");
-  }, [notebooks, boundNotebook]);
+    if (boundNotebook && !notebooks.some((n) => n.name === boundNotebook)) bindNotebook("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notebooks]);
 
   // 流式消息
   useEffect(() => {
@@ -372,8 +380,12 @@ export function ChatPane(): JSX.Element {
     setStreaming(true);
     setReviewState("idle"); // 若是在自查/返工期发的:本轮验收即将被后端打断,先把指示器收掉
     const paths = atts.map((a) => a.path);
-    const nb = boundNotebook || undefined;
-    void ensureSession().then((sessionId) => window.pa.chat.send(sessionId, text, paths.length ? paths : undefined, nb));
+    // 新会话(此刻还没 id)若已预选了知识库:建会话后先把绑定写进记录,再发送。已有会话早在选定时写过。
+    const bootstrapBind = !activeSessionId && boundNotebook ? boundNotebook : "";
+    void ensureSession().then((sessionId) => {
+      if (bootstrapBind) void window.pa.session.bindNotebook(sessionId, bootstrapBind);
+      window.pa.chat.send(sessionId, text, paths.length ? paths : undefined);
+    });
   };
 
   const stop = (): void => {
@@ -470,7 +482,7 @@ export function ChatPane(): JSX.Element {
                 <span className="max-w-[220px] truncate">知识库 · {boundNotebook}</span>
                 <button
                   className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ember-600/70 transition hover:bg-ember-100 hover:text-ember-700 dark:hover:bg-ember-500/20"
-                  onClick={() => setBoundNotebook("")}
+                  onClick={() => bindNotebook("")}
                   aria-label="解绑知识库"
                 >
                   <X size={11} strokeWidth={2.5} />
@@ -535,7 +547,7 @@ export function ChatPane(): JSX.Element {
                             key={nb.id}
                             className="flex w-full items-center gap-2 px-3 py-1.5 text-[12.5px] text-stone-700 transition hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-ink-800"
                             onClick={() => {
-                              setBoundNotebook(nb.name === boundNotebook ? "" : nb.name);
+                              bindNotebook(nb.name === boundNotebook ? "" : nb.name);
                               setNbPickerOpen(false);
                             }}
                           >
