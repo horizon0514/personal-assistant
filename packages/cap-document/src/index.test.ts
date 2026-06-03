@@ -3,11 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { documentTools, documentToolNames, documentToolRisk } from "./index";
+import { createDocumentTools, documentToolNames, documentToolRisk } from "./index";
 
 const FIXTURES = join(fileURLToPath(new URL(".", import.meta.url)), "__fixtures__");
 
-const tool = documentTools.find((t) => t.name === "extract_document")!;
+// ocrModelDir 仅在扫描件路径用到;这些测试都是数字 PDF / 纯文本,不触发 OCR,给个占位目录即可。
+const tool = createDocumentTools({ ocrModelDir: join(tmpdir(), "pa-doc-ocr-models") }).find(
+  (t) => t.name === "extract_document"
+)!;
 let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "pa-doc-"));

@@ -62,9 +62,6 @@ import { keyStore } from "./key-store";
 const PROVIDER = import.meta.env.MAIN_VITE_PROVIDER ?? "deepseek";
 const MODEL = import.meta.env.MAIN_VITE_MODEL ?? "deepseek-v4-flash";
 const API_KEY = import.meta.env.MAIN_VITE_API_KEY;
-// vision 覆盖:强行把模型标注为支持图片输入。默认关——已实测 deepseek-v4-flash 的 API
-// 拒收 image_url(只认 text)。将来换到支持图片的模型时设 MAIN_VITE_VISION=1 开启。
-const FORCE_VISION = import.meta.env.MAIN_VITE_VISION === "1";
 
 /**
  * 跨平台 shell 底座解析(见 akari-goal:exec_shell 跨平台底座)。
@@ -107,7 +104,6 @@ const EVALUATOR_TOOLS = new Set([
   "find_files",
   "grep_files",
   "extract_document",
-  "view_document_pages",
   "read_current_page"
 ]);
 
@@ -359,22 +355,14 @@ function buildAdapter(
   //（否则后台任务的 token 会串进用户当前打开的会话视图);transcript 仍照常落盘。
   const background = opts.background ?? false;
   const memory = getMemory(wsId);
-  const model = createModel({ provider: PROVIDER, modelId: MODEL, forceVision: FORCE_VISION });
-  const modelHasVision = model.input.includes("image");
-  // 视觉工具(browser_screenshot / view_document_pages)只在模型能读图时暴露——否则图会被降级成
-  // 占位文字、纯误导模型。模型不收图就把指定工具滤掉。
-  const dropIfNoVision = (tools: AgentTool[], name: string): AgentTool[] =>
-    modelHasVision ? tools : tools.filter((t) => t.name !== name);
-  const activeBrowserTools = dropIfNoVision(browserTools, "browser_screenshot");
-  const activeDocumentTools = dropIfNoVision(
-    createDocumentTools({
-      ocrModelDir: join(app.getPath("userData"), "paddleocr"),
-      onProgress: (actionId, note) => {
-        if (!background) sendTo("step:progress", { actionId, note });
-      }
-    }),
-    "view_document_pages"
-  );
+  const model = createModel({ provider: PROVIDER, modelId: MODEL });
+  // 文档工具:OCR 是基础能力,模型缓存目录固定注入;onProgress 把"正在识别/下载"亮到 step 行。
+  const documentTools = createDocumentTools({
+    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
+    onProgress: (actionId, note) => {
+      if (!background) sendTo("step:progress", { actionId, note });
+    }
+  });
 
   // 工具目录:按 capability 分组 + 披露规则。新增 capability(如以后接 MCP)就加一项。
   const catalog: CapabilityGroup[] = [
@@ -384,10 +372,10 @@ function buildAdapter(
       tools: [...filesystemTools, createPlanFileChangesTool(requestBatchApproval)]
     },
     {
-      // 工具集在上面装配:含 PaddleOCR 模型缓存目录 + onProgress 进度上报 + 按 modelHasVision 过滤视觉工具。
+      // 工具集在上面装配:extract_document(含 PaddleOCR 扫描件 OCR + onProgress 进度上报)。
       capability: "document",
       alwaysOn: true,
-      tools: activeDocumentTools
+      tools: documentTools
     },
     {
       capability: "memory",
@@ -399,7 +387,7 @@ function buildAdapter(
       // 误以为有 web 工具、找不到就退化成 curl 抓网页(SPA 抓空壳 + curl 走审批)。故 alwaysOn,其 guideline 进冻结 prompt。
       capability: "browser",
       alwaysOn: true,
-      tools: activeBrowserTools
+      tools: browserTools
     },
     {
       capability: "shell",
