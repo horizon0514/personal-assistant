@@ -157,6 +157,12 @@ const api = {
       const listener = (_e: IpcRendererEvent, payload: StepResult): void => cb(payload);
       ipcRenderer.on("step:result", listener);
       return () => ipcRenderer.removeListener("step:result", listener);
+    },
+    /** 订阅工具执行中的进度提示(如扫描件 OCR / 下载语言包),按 actionId 更新对应 step 行 */
+    onProgress: (cb: (p: { actionId: string; note: string }) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: { actionId: string; note: string }): void => cb(payload);
+      ipcRenderer.on("step:progress", listener);
+      return () => ipcRenderer.removeListener("step:progress", listener);
     }
   },
   browser: {

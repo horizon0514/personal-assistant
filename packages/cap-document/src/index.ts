@@ -51,6 +51,11 @@ export interface DocumentToolsOptions {
   readonly ocrTessdataDir?: string;
   /** OCR 语言(Tesseract 语言码),默认 chi_sim+eng。 */
   readonly ocrLanguages?: readonly string[];
+  /**
+   * 执行中进度上报(actionId = execute 的第一个参数 = 渲染层 step 行 id)。
+   * OCR(尤其首次下载语言包)耗时,经此把"正在识别…"亮给用户,避免看着像静默跳过。
+   */
+  readonly onProgress?: (actionId: string, note: string) => void;
 }
 
 function textResult<T>(text: string, details: T): AgentToolResult<T> {
@@ -140,7 +145,7 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
       "把本地文档抽成纯文本以便阅读/总结/再加工。支持 PDF(含扫描件,自动 OCR)与纯文本类文件。" +
       "需要理解一份文档内容时用它,而不是猜测。",
     parameters: extractParams,
-    execute: async (_id, { path }) => {
+    execute: async (id, { path }) => {
       const ext = extname(path).toLowerCase();
 
       if (ext === ".pdf") {
@@ -172,7 +177,13 @@ function createExtractDocumentTool(opts: DocumentToolsOptions): AgentTool<typeof
         if (opts.ocrTessdataDir) {
           try {
             const tessDir = join(opts.ocrTessdataDir, OCR_VARIANT); // 变体子目录,旧缓存自动失效
+            const needDownload = ocrLangs.some((l) => !existsSync(join(tessDir, `${l}.traineddata`)));
+            opts.onProgress?.(
+              id,
+              needDownload ? "扫描件:首次需下载 OCR 语言包(约几十 MB),稍候…" : "扫描件:正在 OCR 识别…"
+            );
             const langs = await ensureTraineddata(tessDir, ocrLangs);
+            if (needDownload && langs.length > 0) opts.onProgress?.(id, "扫描件:正在 OCR 识别…");
             if (langs.length > 0) {
               const ocrParsed = await getOcrParser(tessDir, langs).parse(buf);
               const ocr = clip(densifyCjk(ocrParsed.text).trim());

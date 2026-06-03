@@ -376,7 +376,13 @@ function buildAdapter(
       // 扫描件按需 OCR 的语言包缓存放 <userData>/tessdata(首个扫描件触发下载,之后复用,不随 app 包)。
       capability: "document",
       alwaysOn: true,
-      tools: createDocumentTools({ ocrTessdataDir: join(app.getPath("userData"), "tessdata") })
+      tools: createDocumentTools({
+        ocrTessdataDir: join(app.getPath("userData"), "tessdata"),
+        // OCR/下载耗时,把"正在识别…"亮到对应 step 行,别让用户以为静默跳过。
+        onProgress: (actionId, note) => {
+          if (!background) sendTo("step:progress", { actionId, note });
+        }
+      })
     },
     {
       capability: "memory",

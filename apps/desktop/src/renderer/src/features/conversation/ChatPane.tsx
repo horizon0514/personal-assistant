@@ -189,6 +189,13 @@ export function ChatPane(): JSX.Element {
     });
   }, []);
 
+  // 工具执行中的进度提示(如扫描件 OCR / 下载语言包)→ 显示在对应 step 行(仅 running 时)
+  useEffect(() => {
+    return window.pa.step.onProgress((p) => {
+      setItems((prev) => patchAction(prev, p.actionId, { note: p.note }));
+    });
+  }, []);
+
   // Work Plan:执行器动手前起草 → 弹可编辑的对齐卡
   useEffect(() => {
     return window.pa.plan.onRequest((req) => {
