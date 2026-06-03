@@ -5,6 +5,7 @@ import { ShellProvider, useShell } from "./features/shell/store";
 import { SessionList } from "./features/session/SessionList";
 import { ChatPane } from "./features/conversation/ChatPane";
 import { ArtifactPanel } from "./features/artifact/ArtifactPanel";
+import { UpdateBanner } from "./features/shell/UpdateBanner";
 
 /** 布局外壳:会话列表 / 对话 / artifact(按需)三栏 + 设置浮层 */
 export function App(): JSX.Element {
@@ -66,6 +67,8 @@ function Shell(): JSX.Element {
             <current.Icon size={16} strokeWidth={2} />
           </button>
         </div>
+
+        <UpdateBanner />
 
         <div className="flex min-h-0 flex-1">
           <ChatPane />

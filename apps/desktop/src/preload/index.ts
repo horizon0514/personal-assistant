@@ -5,6 +5,8 @@ import type { MemoryView } from "@pa/ctx-memory";
 export type { MemoryView };
 import type { EvalTelemetrySummary, PersistedEvalRecord } from "../main/eval-telemetry";
 export type { EvalTelemetrySummary, PersistedEvalRecord };
+import type { UpdateStatus } from "../main/updater";
+export type { UpdateStatus };
 import type { FileChangeOp } from "@pa/cap-filesystem";
 import type { WorkspaceRecord, SessionRecord, ScheduleRecord, ScheduleDraft } from "@pa/infra";
 
@@ -268,6 +270,20 @@ const api = {
   evalTelemetry: {
     /** 读取 + 聚合验收 telemetry(全局,供设置窗「验收质量」面板) */
     get: (): Promise<EvalTelemetrySummary> => ipcRenderer.invoke("evalTelemetry:get")
+  },
+  updater: {
+    /** 拉当前更新状态(banner 挂载时补一次) */
+    get: (): Promise<UpdateStatus> => ipcRenderer.invoke("update:get"),
+    /** 订阅更新状态变化(发现新版/下载进度/已就绪/出错) */
+    onStatus: (cb: (s: UpdateStatus) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, s: UpdateStatus): void => cb(s);
+      ipcRenderer.on("update:status", listener);
+      return () => ipcRenderer.removeListener("update:status", listener);
+    },
+    /** 「重启更新」:退出并安装已下载的更新 */
+    install: (): void => ipcRenderer.send("update:install"),
+    /** 「前往下载」:打开 GitHub Releases 页(mac 未签名兜底) */
+    openReleases: (): void => ipcRenderer.send("update:openReleases")
   }
 };
 
