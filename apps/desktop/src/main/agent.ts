@@ -40,7 +40,7 @@ import {
   type FileChangeOp
 } from "@pa/cap-filesystem";
 import { createDocumentTools, documentToolNames, documentToolRisk, documentGuidelines, extractDocument } from "@pa/cap-document";
-import { NotebookStore, createNotebookTools, notebookToolNames, notebookGuidelines } from "@pa/ctx-notebook";
+import { NotebookStore, createNotebookTools, notebookToolNames, notebookGuidelines, addSourceToNotebook } from "@pa/ctx-notebook";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
@@ -869,6 +869,32 @@ export const agent = {
   readNotebookSource(wsId: string, name: string, ref: string) {
     const s = getNotebook(wsId).getSource(name, ref);
     return s ? { id: s.id, name: s.name, pageCount: s.pageCount, ocr: s.ocr, pages: s.pages } : null;
+  },
+  /** UI 新建空知识库(之后往里加来源)。 */
+  createNotebook(wsId: string, name: string) {
+    const nb = getNotebook(wsId).ensureNotebook(name);
+    broadcastNotebooks(wsId);
+    return { id: nb.id, name: nb.name };
+  },
+  /** UI 加来源(选文件/拖入触发):复用与对话工具同一条入库逻辑(抽取+去重+留痕)。 */
+  async addNotebookSource(wsId: string, notebook: string, path: string) {
+    const ocrModelDir = join(app.getPath("userData"), "paddleocr");
+    const r = await addSourceToNotebook(
+      getNotebook(wsId),
+      (p, actionId) => extractDocument(p, { ocrModelDir }, actionId),
+      notebook,
+      path
+    );
+    if (r.status !== "unsupported") broadcastNotebooks(wsId);
+    if (r.status === "reused") return { status: "reused" as const, name: r.source.name };
+    if (r.status === "unsupported") return { status: "unsupported" as const, note: r.note };
+    return { status: "added" as const, name: r.source.name, error: !!r.source.error, note: r.source.note };
+  },
+  /** UI 移出来源(软删,可恢复)。 */
+  removeNotebookSource(wsId: string, notebook: string, ref: string) {
+    const removed = getNotebook(wsId).removeSource(notebook, ref);
+    if (removed) broadcastNotebooks(wsId);
+    return { removed: !!removed };
   },
 
   listJournal: () => journal.list(),

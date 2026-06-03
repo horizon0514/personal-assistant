@@ -383,6 +383,43 @@ const removeParams = Type.Object({
   reason: Type.Optional(Type.String({ description: "可选:为什么移除" }))
 });
 
+/** addSourceToNotebook 的结果(工具层/UI 层各自渲染成自己的回报)。 */
+export type AddSourceOutcome =
+  | { status: "reused"; source: Source }
+  | { status: "unsupported"; note: string }
+  | { status: "added"; source: Source; hasText: boolean };
+
+/**
+ * 提取并入库一份来源 —— **对话工具与 UI 共用**的单一入口:
+ * 去重(同 path 不重抽)→ 抽取 → 不支持格式拒收 → 抽不到文本(扫描件 OCR 空/解析失败)标 error 留痕。
+ */
+export async function addSourceToNotebook(
+  store: NotebookStore,
+  extract: DocumentExtractor,
+  notebook: string,
+  path: string,
+  actionId = ""
+): Promise<AddSourceOutcome> {
+  const existing = store.findActiveSourceByPath(notebook, path);
+  if (existing) return { status: "reused", source: existing };
+
+  const doc = await extract(path, actionId);
+  if (doc.kind === "unsupported") return { status: "unsupported", note: doc.note ?? `不支持的格式:${path}` };
+
+  const hasText = doc.pages.length > 0;
+  const { source } = store.addSource(notebook, {
+    path,
+    name: basename(path),
+    kind: doc.kind === "pdf" ? "pdf" : "text",
+    ocr: doc.ocr,
+    pageCount: doc.pageCount ?? doc.pages.length,
+    pages: doc.pages,
+    error: doc.error || !hasText,
+    note: hasText ? undefined : doc.note ?? "未能抽出文本(扫描件未识别或解析失败)"
+  });
+  return { status: "added", source, hasText };
+}
+
 /**
  * 创建 notebook 工具集。
  * @param store      该 workspace 的 NotebookStore
@@ -402,43 +439,22 @@ export function createNotebookTools(
       "知识库不存在会自动新建。入库会抽取并缓存逐页文本,便于之后基于这批资料反复问答。一次加一份。",
     parameters: addParams,
     execute: async (id, { notebook, path }) => {
-      // 已在库里就别重抽(省 OCR/解析)。
-      const existing = store.findActiveSourceByPath(notebook, path);
-      if (existing) {
+      const r = await addSourceToNotebook(store, extract, notebook, path, id);
+      if (r.status === "reused") {
         return {
-          content: [{ type: "text", text: `「${basename(path)}」已在知识库「${notebook}」中,未重复添加。` }],
-          details: { reused: true, sourceId: existing.id }
+          content: [{ type: "text", text: `「${r.source.name}」已在知识库「${notebook}」中,未重复添加。` }],
+          details: { reused: true, sourceId: r.source.id }
         };
       }
-
-      const doc = await extract(path, id);
-      if (doc.kind === "unsupported") {
-        return {
-          content: [{ type: "text", text: doc.note ?? `不支持的格式,未加入知识库:${path}` }],
-          details: { added: false, reason: "unsupported" }
-        };
+      if (r.status === "unsupported") {
+        return { content: [{ type: "text", text: r.note }], details: { added: false, reason: "unsupported" } };
       }
-
-      const kind: SourceKind = doc.kind === "pdf" ? "pdf" : "text";
-      const pageCount = doc.pageCount ?? doc.pages.length;
-      const hasText = doc.pages.length > 0;
-      const { notebook: nb, source } = store.addSource(notebook, {
-        path,
-        name: basename(path),
-        kind,
-        ocr: doc.ocr,
-        pageCount,
-        pages: doc.pages,
-        // 抽不到文本(扫描件 OCR 空 / 解析失败)→ 标记 error 留痕,而非静默丢。
-        error: doc.error || !hasText,
-        note: hasText ? undefined : doc.note ?? "未能抽出文本(扫描件未识别或解析失败)"
-      });
       onChange?.();
-
-      const text = hasText
-        ? `已加入知识库「${nb.name}」:${source.name}(${source.pageCount} 页 / ${source.chars} 字${source.ocr ? "、扫描件 OCR" : ""})`
-        : `已加入知识库「${nb.name}」:${source.name}，但${source.note}。可移除后换可识别的版本重试。`;
-      return { content: [{ type: "text", text }], details: { added: true, sourceId: source.id, error: source.error } };
+      const s = r.source;
+      const text = r.hasText
+        ? `已加入知识库「${notebook}」:${s.name}(${s.pageCount} 页 / ${s.chars} 字${s.ocr ? "、扫描件 OCR" : ""})`
+        : `已加入知识库「${notebook}」:${s.name}，但${s.note}。可移除后换可识别的版本重试。`;
+      return { content: [{ type: "text", text }], details: { added: true, sourceId: s.id, error: s.error } };
     }
   };
 

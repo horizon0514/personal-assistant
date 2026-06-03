@@ -48,6 +48,14 @@ export interface NotebookSourceContent {
   pages: PageText[];
 }
 
+/** UI 加来源的结果。 */
+export interface NotebookAddResult {
+  status: "added" | "reused" | "unsupported";
+  name?: string;
+  error?: boolean;
+  note?: string;
+}
+
 /** 重建历史会话用的 timeline 项(由主进程从 transcript 映射,与实时事件形状一致)。 */
 export interface PersistedAction {
   id: string;
@@ -292,6 +300,17 @@ const api = {
     /** 读某来源的逐页全文(ref=来源名/文件名片段/路径片段);不存在返回 null */
     readSource: (wsId: string, name: string, ref: string): Promise<NotebookSourceContent | null> =>
       ipcRenderer.invoke("notebook:readSource", { wsId, name, ref }),
+    /** 新建空知识库(之后往里加来源) */
+    create: (wsId: string, name: string): Promise<{ id: string; name: string }> =>
+      ipcRenderer.invoke("notebook:create", { wsId, name }),
+    /** 加一份来源(选文件/拖入触发);抽取+入库,返回结果 */
+    addSource: (wsId: string, notebook: string, path: string): Promise<NotebookAddResult> =>
+      ipcRenderer.invoke("notebook:addSource", { wsId, notebook, path }),
+    /** 移出一份来源(软删,可恢复) */
+    removeSource: (wsId: string, notebook: string, ref: string): Promise<{ removed: boolean }> =>
+      ipcRenderer.invoke("notebook:removeSource", { wsId, notebook, ref }),
+    /** 弹系统文件选择框选文档,返回绝对路径数组(取消则空) */
+    pickFiles: (): Promise<string[]> => ipcRenderer.invoke("notebook:pickFiles"),
     /** 知识库变化(含 agent 在对话中增删来源);payload 带 wsId,消费方按所选 workspace 过滤 */
     onChanged: (cb: (payload: NotebookChange) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, payload: NotebookChange): void => cb(payload);
