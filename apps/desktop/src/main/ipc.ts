@@ -7,6 +7,7 @@ import type { ScheduleDraft } from "@pa/infra";
 import { agent } from "./agent";
 import { schedules } from "./scheduler";
 import { readEvalTelemetry } from "./eval-telemetry";
+import { getUpdateStatus, installUpdate, openReleasesPage } from "./updater";
 
 export function registerIpc(): void {
   // Workspace
@@ -93,6 +94,11 @@ export function registerIpc(): void {
 
   // 验收可观测:读取 + 聚合 eval-telemetry.jsonl(全局,供设置窗「验收质量」面板)
   ipcMain.handle("evalTelemetry:get", () => readEvalTelemetry());
+
+  // 自动更新:渲染层 banner 拉当前状态 + 触发「重启更新」/「前往下载」。状态推送走 update:status 事件。
+  ipcMain.handle("update:get", () => getUpdateStatus());
+  ipcMain.on("update:install", () => installUpdate());
+  ipcMain.on("update:openReleases", () => openReleasesPage());
 
   // Personal Memory:列出 / 软删(遗忘)/ 恢复(按 wsId)
   ipcMain.handle("memory:list", (_e, wsId: string) => agent.listMemory(wsId));
