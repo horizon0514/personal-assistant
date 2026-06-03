@@ -6,6 +6,7 @@ import { type IpcMainEvent, ipcMain } from "electron";
 import type { ScheduleDraft } from "@pa/infra";
 import { agent } from "./agent";
 import { schedules } from "./scheduler";
+import { readEvalTelemetry } from "./eval-telemetry";
 
 export function registerIpc(): void {
   // Workspace
@@ -89,6 +90,9 @@ export function registerIpc(): void {
   );
   ipcMain.handle("schedule:remove", (_e, id: string) => schedules.remove(id));
   ipcMain.handle("schedule:runNow", (_e, id: string) => schedules.runNow(id));
+
+  // 验收可观测:读取 + 聚合 eval-telemetry.jsonl(全局,供设置窗「验收质量」面板)
+  ipcMain.handle("evalTelemetry:get", () => readEvalTelemetry());
 
   // Personal Memory:列出 / 软删(遗忘)/ 恢复(按 wsId)
   ipcMain.handle("memory:list", (_e, wsId: string) => agent.listMemory(wsId));

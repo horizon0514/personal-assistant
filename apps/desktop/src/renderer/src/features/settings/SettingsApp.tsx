@@ -1,12 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Brain, Info, KeyRound, Palette, SlidersHorizontal } from "lucide-react";
+import { Brain, Gauge, Info, KeyRound, Palette, SlidersHorizontal } from "lucide-react";
 import { AkariMark } from "../shell/AkariMark";
 import type { WorkspaceRecord } from "../../../../preload";
 import { ApiKeySection } from "./ApiKeySection";
 import { ThemePanel } from "./ThemePanel";
 import { MemoryList } from "../memory/MemoryList";
+import { EvalTelemetryPanel } from "../telemetry/EvalTelemetryPanel";
 
-type Section = "model" | "general" | "about" | "memory" | "preferences";
+type Section = "model" | "general" | "telemetry" | "about" | "memory" | "preferences";
 
 /** 设置窗根:左分组 sidebar + 右详情。应用组(全局)/ 工作空间组(按所选 wsId)。 */
 export function SettingsApp(): JSX.Element {
@@ -28,6 +29,7 @@ export function SettingsApp(): JSX.Element {
         <Group title="应用" />
         <NavItem icon={<KeyRound size={15} />} label="模型 / API Key" active={section === "model"} onClick={() => setSection("model")} />
         <NavItem icon={<Palette size={15} />} label="通用" active={section === "general"} onClick={() => setSection("general")} />
+        <NavItem icon={<Gauge size={15} />} label="验收质量" active={section === "telemetry"} onClick={() => setSection("telemetry")} />
         <NavItem icon={<Info size={15} />} label="关于" active={section === "about"} onClick={() => setSection("about")} />
 
         <Group title="工作空间" />
@@ -57,6 +59,11 @@ export function SettingsApp(): JSX.Element {
         {section === "general" && (
           <Pane title="通用">
             <ThemePanel />
+          </Pane>
+        )}
+        {section === "telemetry" && (
+          <Pane title="验收质量" hint="全局,所有工作空间共用" wide>
+            <EvalTelemetryPanel />
           </Pane>
         )}
         {section === "about" && (
@@ -114,9 +121,9 @@ function NavItem({
   );
 }
 
-function Pane({ title, hint, children }: { title: string; hint?: string; children: ReactNode }): JSX.Element {
+function Pane({ title, hint, children, wide }: { title: string; hint?: string; children: ReactNode; wide?: boolean }): JSX.Element {
   return (
-    <section className="mx-auto max-w-md">
+    <section className={"mx-auto " + (wide ? "max-w-2xl" : "max-w-md")}>
       <div className="mb-3 flex items-baseline gap-2">
         <h2 className="text-[15px] font-semibold text-stone-700 dark:text-stone-200">{title}</h2>
         {hint && <span className="text-[11px] text-stone-500 dark:text-stone-500">{hint}</span>}
