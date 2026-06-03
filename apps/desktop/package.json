@@ -36,6 +36,8 @@
     "electron-updater": "^6.8.3",
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.16.0",
+    "onnxruntime-node": "^1.26.0",
+    "ppu-paddle-ocr": "^5.8.3",
     "react-markdown": "^9.0.1",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.0",

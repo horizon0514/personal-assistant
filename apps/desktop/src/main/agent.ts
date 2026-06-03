@@ -367,7 +367,7 @@ function buildAdapter(
     : browserTools.filter((t) => t.name !== "browser_screenshot");
   // 同理:view_document_pages(PDF 页→图)只有模型能读图时才暴露,否则图会被降级丢弃、纯误导。
   const documentToolsAll = createDocumentTools({
-    ocrTessdataDir: join(app.getPath("userData"), "tessdata"),
+    ocrModelDir: join(app.getPath("userData"), "paddleocr"),
     onProgress: (actionId, note) => {
       if (!background) sendTo("step:progress", { actionId, note });
     }

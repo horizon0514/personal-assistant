@@ -16,7 +16,9 @@
     "@earendil-works/pi-agent-core": "^0.75.4",
     "@earendil-works/pi-ai": "^0.75.4",
     "@llamaindex/liteparse": "^2.0.4",
-    "@pa/domain-core": "workspace:*"
+    "@pa/domain-core": "workspace:*",
+    "onnxruntime-node": "^1.26.0",
+    "ppu-paddle-ocr": "^5.8.3"
   },
   "devDependencies": {
     "typescript": "^5.6.3",
