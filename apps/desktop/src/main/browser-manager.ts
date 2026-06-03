@@ -13,7 +13,7 @@
  * 架构见 research/design-discussion.md「内置浏览器调研」:驱动 Electron 自带 Chromium,
  * 可见、非 headless、持久 partition(登录态留存),不接管用户 Chrome、不用搜索 API。
  */
-import { app, BrowserWindow, type WebContents } from "electron";
+import { app, BrowserWindow, session, type WebContents } from "electron";
 import type { BrowserController, FetchedPage, SearchHit } from "@pa/cap-browser";
 import { getMainWebContents } from "./main-window";
 
@@ -40,6 +40,8 @@ export class BrowserManager implements BrowserController {
     // 渲染层挂载 <webview> 时,这里拿到它的 webContents
     app.on("web-contents-created", (_e, contents) => {
       if (contents.getType() !== "webview") return;
+      // 只认调研 partition 的 webview;放过其它 <webview>(如知识库原件预览),否则会被误当成调研浏览器。
+      if (contents.session !== session.fromPartition(RESEARCH_PARTITION)) return;
       this.webview = contents;
       this.waiters.splice(0).forEach((w) => w(contents));
       contents.on("destroyed", () => {

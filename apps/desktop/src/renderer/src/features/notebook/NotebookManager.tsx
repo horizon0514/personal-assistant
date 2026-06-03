@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ChevronRight, FilePlus2, FileText, Loader2, Plus, ScanText, Trash2, X, AlertTriangle } from "lucide-react";
+import { BookOpen, ChevronRight, FilePlus2, FileText, Loader2, Plus, ScanText, Trash2, Upload, X, AlertTriangle } from "lucide-react";
 import type { NotebookView, SourceView, NotebookSourceContent } from "../../../../preload";
 import { SourceReader } from "./SourceReader";
 
@@ -8,6 +8,12 @@ import { SourceReader } from "./SourceReader";
  * 左栏 = 知识库树(库 → 展开看来源);右栏 = 选中来源的逐页全文。
  * 增删来源:UI 选文件/拖入(→ 抽取入库)或在对话里让 agent 加;经 notebook:changed 实时同步。
  */
+/** 绝对路径 → file:// URL(逐段编码,处理空格/特殊字符);PDF 可带 #page=N 跳页。 */
+function toFileUrl(path: string, page?: number): string {
+  const url = "file://" + path.split("/").map(encodeURIComponent).join("/");
+  return page ? `${url}#page=${page}` : url;
+}
+
 export function NotebookManager({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }): JSX.Element {
   const [notebooks, setNotebooks] = useState<NotebookView[]>([]);
   const [openNb, setOpenNb] = useState<string>("");
@@ -17,6 +23,11 @@ export function NotebookManager({ workspaceId, onClose }: { workspaceId: string;
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(""); // 导入中提示;空=空闲
+  const [rightDragOver, setRightDragOver] = useState(false);
+  const [view, setView] = useState<"original" | "parsed">("original"); // 预览:原件优先,可切解析文本
+
+  // 右侧拖入/添加绑定的知识库:优先正在看的来源所属库,否则当前展开的库。
+  const activeNb = selected?.notebook || openNb;
 
   useEffect(() => {
     void window.pa.notebook.list(workspaceId).then(setNotebooks);
@@ -27,6 +38,7 @@ export function NotebookManager({ workspaceId, onClose }: { workspaceId: string;
 
   const openSource = (notebook: string, source: SourceView): void => {
     setSelected({ notebook, source });
+    setView("original"); // 默认看原件;解析文本按需切
     setContent(null);
     setLoading(true);
     void window.pa.notebook.readSource(workspaceId, notebook, source.id).then((c) => {
@@ -166,32 +178,97 @@ export function NotebookManager({ workspaceId, onClose }: { workspaceId: string;
             </div>
           </div>
 
-          {/* 右:来源全文 */}
-          <div className="min-w-0 flex-1 overflow-auto p-5">
+          {/* 右:来源预览(原件为主,可切解析文本)+ 拖入区(绑定 activeNb,拖到整块任意位置都能加) */}
+          <div
+            className="relative flex min-w-0 flex-1 flex-col"
+            onDragOver={(e) => {
+              if (!activeNb || !Array.from(e.dataTransfer.types).includes("Files")) return;
+              e.preventDefault();
+              setRightDragOver(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              setRightDragOver(false);
+            }}
+            onDrop={(e) => {
+              setRightDragOver(false);
+              if (activeNb) dropFiles(activeNb, e);
+            }}
+          >
+            {rightDragOver && activeNb && (
+              <div className="pointer-events-none absolute inset-3 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ember-400 bg-ember-50/85 text-ember-700 backdrop-blur-sm dark:bg-ember-500/10 dark:text-ember-200">
+                <Upload size={28} strokeWidth={1.8} />
+                <span className="text-[13px] font-medium">松开即可加入「{activeNb}」</span>
+              </div>
+            )}
             {!selected ? (
-              <p className="px-1 py-10 text-center text-[12.5px] text-stone-500">
-                选择左侧某份来源查看其内容;把 PDF/文本拖到某个知识库上即可加入。
-              </p>
+              activeNb ? (
+                <div className="flex flex-1 flex-col items-center justify-center px-6">
+                  <button
+                    onClick={() => void pickAndAdd(activeNb)}
+                    className="flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-stone-300 px-14 py-12 text-stone-500 transition hover:border-ember-400 hover:bg-ember-50/40 hover:text-ember-600 dark:border-white/10 dark:hover:bg-ember-500/5"
+                  >
+                    <FilePlus2 size={34} strokeWidth={1.5} />
+                    <span className="text-[13.5px] font-medium">点击选择文件,加入「{activeNb}」</span>
+                    <span className="text-[11.5px] text-stone-400">或把 PDF / 文本直接拖到这里</span>
+                  </button>
+                </div>
+              ) : (
+                <p className="flex flex-1 items-center justify-center px-6 text-center text-[12.5px] text-stone-500">
+                  选择左侧一个知识库,即可在这里添加或拖入文件;选中某份来源可查看其内容。
+                </p>
+              )
             ) : (
               <>
-                <div className="mb-3 border-b border-stone-200/70 pb-2 dark:border-white/5">
-                  <div className="flex items-center gap-1.5 text-[13.5px] font-medium text-stone-800 dark:text-stone-100">
-                    {selected.source.ocr ? <ScanText size={14} className="text-stone-400" /> : <FileText size={14} className="text-stone-400" />}
-                    {selected.source.name}
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-stone-200/70 px-5 py-2.5 dark:border-white/5">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5 truncate text-[13.5px] font-medium text-stone-800 dark:text-stone-100">
+                      {selected.source.ocr ? <ScanText size={14} className="shrink-0 text-stone-400" /> : <FileText size={14} className="shrink-0 text-stone-400" />}
+                      <span className="truncate">{selected.source.name}</span>
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-stone-400">
+                      {selected.source.pageCount} 页 · {selected.source.chars} 字 · {selected.notebook}
+                    </div>
                   </div>
-                  <div className="mt-0.5 text-[11px] text-stone-400">
-                    {selected.source.pageCount} 页 · {selected.source.chars} 字 · {selected.notebook}
+                  {/* 原文 / 解析 切换 */}
+                  <div className="flex shrink-0 rounded-lg bg-stone-100 p-0.5 text-[11.5px] dark:bg-ink-800">
+                    {(["original", "parsed"] as const).map((v) => (
+                      <button
+                        key={v}
+                        onClick={() => setView(v)}
+                        className={
+                          "rounded-md px-2.5 py-1 font-medium transition " +
+                          (view === v
+                            ? "bg-white text-stone-800 shadow-sm dark:bg-ink-700 dark:text-stone-100"
+                            : "text-stone-500 hover:text-stone-700 dark:hover:text-stone-300")
+                        }
+                      >
+                        {v === "original" ? "原文" : "解析"}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                {loading ? (
-                  <div className="flex items-center justify-center gap-2 py-10 text-[12.5px] text-stone-500">
-                    <Loader2 size={14} className="animate-spin" /> 读取中…
-                  </div>
-                ) : content ? (
-                  <SourceReader pages={content.pages} />
-                ) : (
-                  <p className="py-10 text-center text-[12.5px] text-stone-500">读不到这份来源(可能已被移除)。</p>
-                )}
+                <div className="min-h-0 flex-1">
+                  {view === "original" ? (
+                    <webview
+                      key={selected.source.id}
+                      src={toFileUrl(selected.source.path)}
+                      plugins
+                      className="h-full w-full"
+                      style={{ width: "100%", height: "100%" }}
+                    />
+                  ) : loading ? (
+                    <div className="flex items-center justify-center gap-2 py-10 text-[12.5px] text-stone-500">
+                      <Loader2 size={14} className="animate-spin" /> 读取中…
+                    </div>
+                  ) : content ? (
+                    <div className="h-full overflow-auto p-5">
+                      <SourceReader pages={content.pages} />
+                    </div>
+                  ) : (
+                    <p className="py-10 text-center text-[12.5px] text-stone-500">读不到这份来源(可能已被移除)。</p>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -242,12 +319,12 @@ function NotebookNode({
           <span className="shrink-0 text-[11px] text-stone-400">{nb.sourceCount}</span>
         </button>
         <button
-          className="shrink-0 rounded p-1 text-stone-400 opacity-0 transition hover:text-ember-600 group-hover:opacity-100"
+          className="shrink-0 rounded-md p-1.5 text-stone-400 transition hover:bg-ember-50 hover:text-ember-600 dark:hover:bg-ember-500/10"
           onClick={onAddFiles}
           title="加文件到这个知识库"
           aria-label="加文件"
         >
-          <FilePlus2 size={14} />
+          <FilePlus2 size={17} strokeWidth={2} />
         </button>
       </div>
       {open && (

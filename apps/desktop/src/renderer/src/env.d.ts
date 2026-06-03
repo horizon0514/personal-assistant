@@ -22,6 +22,8 @@ declare global {
         src?: string;
         partition?: string;
         allowpopups?: string;
+        /** 启用内置 PDF 阅读器(Chromium PDF viewer 是内部插件,渲染 file:// PDF 需开)。 */
+        plugins?: boolean;
         ref?: Ref<ElectronWebview>;
       };
     }
