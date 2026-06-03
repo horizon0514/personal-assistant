@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
 import type { MemoryView } from "@pa/ctx-memory";
@@ -126,8 +126,13 @@ const api = {
     setApiKey: (key: string): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:setApiKey", key),
     clearApiKey: (): Promise<ApiKeyStatus> => ipcRenderer.invoke("secret:clearApiKey")
   },
+  /** 拖入文件:在渲染层从 File 对象取其本地绝对路径(Electron 33 起 File.path 已移除,须用 webUtils)。 */
+  files: {
+    pathForDropped: (file: File): string => webUtils.getPathForFile(file)
+  },
   chat: {
-    send: (sessionId: string, text: string): void => ipcRenderer.send("chat:send", { sessionId, text }),
+    send: (sessionId: string, text: string, attachments?: string[]): void =>
+      ipcRenderer.send("chat:send", { sessionId, text, attachments }),
     /** 停止当前会话正在进行的运行 */
     stop: (sessionId: string): void => ipcRenderer.send("chat:stop", sessionId),
     model: (): Promise<string> => ipcRenderer.invoke("chat:model"),
