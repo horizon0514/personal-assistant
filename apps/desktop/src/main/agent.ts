@@ -43,6 +43,7 @@ import { createDocumentTools, documentToolNames, documentToolRisk, documentGuide
 import { NotebookStore, createNotebookTools, notebookToolNames, notebookGuidelines, addSourceToNotebook } from "@pa/ctx-notebook";
 import { createBrowserTools, browserToolNames, browserToolRisk, browserGuidelines } from "@pa/cap-browser";
 import { createShellTools, shellToolNames, classifyShellRisk, shellGuidelines, type ShellSpec } from "@pa/cap-shell";
+import { createOfficeTools, officeToolNames, classifyOfficeRisk, officeGuidelines } from "@pa/cap-office";
 import { scanSkills, renderSkillsForContext, createUseSkillTool } from "@pa/ctx-skill";
 import { BrowserManager } from "./browser-manager";
 import { createSearchHistoryTool, searchHistoryToolName } from "./history-search";
@@ -93,6 +94,7 @@ for (const t of documentToolNames) capabilityByTool.set(t, "document");
 for (const t of notebookToolNames) capabilityByTool.set(t, "notebook");
 for (const t of browserToolNames) capabilityByTool.set(t, "browser");
 for (const t of shellToolNames) capabilityByTool.set(t, "shell");
+for (const t of officeToolNames) capabilityByTool.set(t, "office");
 capabilityByTool.set(searchHistoryToolName, "memory"); // 跨对话回忆,归入记忆能力
 for (const t of scheduleToolNames) capabilityByTool.set(t, "schedule");
 const capabilityOf = (tool: string): Capability => capabilityByTool.get(tool) ?? "filesystem";
@@ -120,10 +122,21 @@ const STATIC_TOOL_RISK: Readonly<Record<string, RiskLevel>> = {
   ...documentToolRisk,
   ...browserToolRisk
 };
+/** 从 office_cli 的 argsText({args:[...]} 的 JSON)里解出参数数组;解析失败 → 空数组(classifyOfficeRisk 会保守判 Destructive)。 */
+function officeArgsFromText(argsText: string): string[] {
+  try {
+    const parsed = JSON.parse(argsText) as { args?: unknown };
+    return Array.isArray(parsed.args) ? parsed.args.filter((a): a is string => typeof a === "string") : [];
+  } catch {
+    return [];
+  }
+}
 function isMutatingTool(tool: string, argsText: string): boolean {
   // exec_shell:风险取决于命令;同 gatekeeper 用 skill 自声明的"已知安全"模式判定,非只读才算改动。
   if (tool === "exec_shell")
     return classifyShellRisk(argsText, scanSkills(SKILLS_DIR).flatMap((s) => s.safeShell)) !== "ReadOnly";
+  // office_cli:风险取决于子命令;argsText 是 {args:[...]} 的 JSON,解出数组按子命令分级,非只读才算改动。
+  if (tool === "office_cli") return classifyOfficeRisk(officeArgsFromText(argsText)) !== "ReadOnly";
   if (tool === "plan_file_changes") return true; // 批量 move/delete,风险表外的特例(它内部自做审批)
   const risk = STATIC_TOOL_RISK[tool];
   return risk ? MUTATING_RISK.has(risk) : false; // 记忆/定时/propose_plan/ask 等不在表内 → 非"交付物式"改动,不触发验收
@@ -165,6 +178,13 @@ const SHELL_KEYWORDS =
   /shell|终端|命令行|命令|执行|运行|跑一下|git |npm |pnpm |yarn |node |python |bash |zsh |chmod|chown|mkdir|rm |cp |mv |ls |cat |grep |find |du |df |ps |kill|brew |curl |wget |tar |zip |unzip|docker |kubectl|ssh |scp/i;
 
 /**
+ * 启用 office 工具组的关键词。命中(提到 Office 文档/格式/编辑动作)即把 office_cli 暴露给本轮。
+ * 与 shell 同为 gated:不提 Office 的任务不背它(省工具 schema + 避免误用)。
+ */
+const OFFICE_KEYWORDS =
+  /office|word|excel|powerpoint|\bppt\b|docx|xlsx|pptx|幻灯片|演示文稿|电子表格|工作簿|单元格|做个?(表格|幻灯|ppt|演示文稿)|word\s?文档/i;
+
+/**
  * 注入 system prompt 的能力分区描述。**字节冻结**:同一份描述跨 session/天/adapter 重建必须逐字节相同。
  * 不逐工具枚举——实际工具集每轮由 API tools 参数承载。
  */
@@ -194,6 +214,10 @@ const CAPABILITY_DESCRIPTIONS = [
   {
     name: "schedule",
     summary: "定时任务:用自然语言设定「到点(每天/指定星期某时刻)自动跑一条指令并通知」,以及查看/修改/暂停/取消已有定时。别让用户去面板填表单。详见下方「定时任务」指南。"
+  },
+  {
+    name: "office",
+    summary: "读/改/新建 Word(.docx)、Excel(.xlsx)、PowerPoint(.pptx),无需安装 Office。读类自动执行,改文件需审批。详见下方「Office 文档」指南。"
   }
 ];
 
@@ -406,6 +430,9 @@ function buildAdapter(
     if (!background) sendTo("step:progress", { actionId, note });
   };
   const documentTools = createDocumentTools({ ocrModelDir, onProgress: onDocProgress });
+  // Office 工具:OfficeCLI 二进制按需下载到缓存目录(组合根注入);onProgress 把"正在下载运行时"亮到 step 行。
+  const officeBinDir = join(app.getPath("userData"), "officecli");
+  const officeTools = createOfficeTools({ officeBinDir, onProgress: onDocProgress });
   // 知识库(来源集):入库复用 cap-document 的抽取器(注入,保持 ctx-notebook 与 cap 解耦);每 workspace 一份。
   // onChange → 广播 notebook:changed,agent 在对话里增删来源时左侧面板实时刷新。
   const notebookTools = createNotebookTools(
@@ -455,6 +482,15 @@ function buildAdapter(
       matches: (text) => SHELL_KEYWORDS.test(text) || scanSkills(SKILLS_DIR).length > 0,
       tools: [...shellTools],
       guideline: shellGuidelines
+    },
+    {
+      // Office 编辑(Word/Excel/PPT):gated——只在提到 Office 文档/格式/编辑动作时暴露,
+      // 不提的任务不背它(底层是个大二进制,且模型无谓时不该惦记它)。其 guideline 随选中按轮注入。
+      capability: "office",
+      alwaysOn: false,
+      matches: (text) => OFFICE_KEYWORDS.test(text),
+      tools: officeTools,
+      guideline: officeGuidelines
     },
     {
       // 管定时任务是私人助理的核心职责,且关键词门控对续接指令太脆 —— 用户先「每天10点提醒喝水」(命中),
@@ -580,6 +616,9 @@ function buildAdapter(
             String(call.args.command ?? ""),
             scanSkills(SKILLS_DIR).flatMap((s) => s.safeShell)
           );
+        // office_cli 风险取决于子命令:读类自动跑,改文件类走审批。
+        if (call.tool === "office_cli")
+          return classifyOfficeRisk(Array.isArray(call.args.args) ? (call.args.args as string[]) : []);
         return riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call);
       },
       requestApproval
