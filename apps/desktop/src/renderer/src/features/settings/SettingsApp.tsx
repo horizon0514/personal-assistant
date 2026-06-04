@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Brain, Gauge, Info, KeyRound, Palette, SlidersHorizontal } from "lucide-react";
+import { Brain, Gauge, Info, KeyRound, Palette, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { AkariMark } from "../shell/AkariMark";
 import type { WorkspaceRecord } from "../../../../preload";
 import { ApiKeySection } from "./ApiKeySection";
 import { ThemePanel } from "./ThemePanel";
+import { ApprovalsPanel } from "./ApprovalsPanel";
 import { MemoryList } from "../memory/MemoryList";
 import { EvalTelemetryPanel } from "../telemetry/EvalTelemetryPanel";
 
-type Section = "model" | "general" | "telemetry" | "about" | "memory" | "preferences";
+type Section = "model" | "general" | "approvals" | "telemetry" | "about" | "memory" | "preferences";
 
 /** 设置窗根:左分组 sidebar + 右详情。应用组(全局)/ 工作空间组(按所选 wsId)。 */
 export function SettingsApp(): JSX.Element {
@@ -29,6 +30,7 @@ export function SettingsApp(): JSX.Element {
         <Group title="应用" />
         <NavItem icon={<KeyRound size={15} />} label="模型 / API Key" active={section === "model"} onClick={() => setSection("model")} />
         <NavItem icon={<Palette size={15} />} label="通用" active={section === "general"} onClick={() => setSection("general")} />
+        <NavItem icon={<ShieldCheck size={15} />} label="权限" active={section === "approvals"} onClick={() => setSection("approvals")} />
         <NavItem icon={<Gauge size={15} />} label="验收质量" active={section === "telemetry"} onClick={() => setSection("telemetry")} />
         <NavItem icon={<Info size={15} />} label="关于" active={section === "about"} onClick={() => setSection("about")} />
 
@@ -59,6 +61,11 @@ export function SettingsApp(): JSX.Element {
         {section === "general" && (
           <Pane title="通用">
             <ThemePanel />
+          </Pane>
+        )}
+        {section === "approvals" && (
+          <Pane title="权限" hint="全局,所有工作空间共用">
+            <ApprovalsPanel />
           </Pane>
         )}
         {section === "telemetry" && (

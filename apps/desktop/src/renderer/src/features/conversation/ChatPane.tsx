@@ -209,6 +209,7 @@ export function ChatPane(): JSX.Element {
           capability: req.capability,
           status: "awaiting",
           riskLevel: req.riskLevel,
+          rememberLabel: req.rememberLabel ?? null,
           summary: argSummary(req.tool, req.args)
         })
       );
@@ -286,8 +287,8 @@ export function ChatPane(): JSX.Element {
     return window.pa.reversibility.onChanged(setJournal);
   }, []);
 
-  const onApprove = (actionId: string, approved: boolean): void => {
-    window.pa.approval.resolve(actionId, approved);
+  const onApprove = (actionId: string, approved: boolean, remember = false): void => {
+    window.pa.approval.resolve(actionId, approved, remember);
     setItems((prev) =>
       patchAction(prev, actionId, approved ? { status: "running" } : { status: "failed", error: "已拒绝" })
     );

@@ -2,7 +2,8 @@
  * @pa/ctx-trust — Trust & Governance(核心域)
  *
  * 守门人:对每个待执行工具做风险分级 → 查权限策略 → 只读自动放行 /
- * 需审批则发起 UI 审批并等待 / 拒绝则拦截。挂在 pi 的 beforeToolCall 上。
+ * 需审批则先查「已记住允许」命中即放行 / 否则发起 UI 审批并等待 / 拒绝则拦截。
+ * 挂在 pi 的 beforeToolCall 上。
  */
 import type { GateDecision, Gatekeeper, RiskLevel, ToolCallIntent } from "@pa/domain-core";
 
@@ -14,9 +15,35 @@ export type Policy = (risk: RiskLevel) => Verdict;
 
 export const defaultPolicy: Policy = (risk) => (risk === "ReadOnly" ? "auto" : "ask");
 
+/**
+ * 记忆键:把一次调用归约成「同类操作」的稳定标识 + 给用户看的说明。
+ * 同类(命令头+子命令)相同则视为已授权,改参数也放行。null = 该调用不可记忆(始终逐次审批)。
+ */
+export interface RememberKey {
+  /** 匹配用稳定 id,如 "shell:git commit"、"office:set" */
+  readonly id: string;
+  /** 展示用说明,如 "git commit 命令" */
+  readonly label: string;
+}
+
+/** 已记住的「允许」规则存储(全局持久化,主进程实现注入)。 */
+export interface RememberStore {
+  has(id: string): boolean;
+  add(id: string, label: string): void;
+}
+
+/** 用户对一次审批的决定。 */
+export interface ApprovalDecision {
+  readonly approved: boolean;
+  /** 是否勾选「以后此类不再问」(仅当 ask 带 rememberKey 时有意义)。 */
+  readonly remember: boolean;
+}
+
 /** 审批请求(交给 UI 桥处理)*/
 export interface ApprovalAsk extends ToolCallIntent {
   readonly riskLevel: RiskLevel;
+  /** 可记忆则带键(UI 据此显示「以后 {label} 不再问」按钮);不可记忆为 null。 */
+  readonly rememberKey: RememberKey | null;
 }
 
 export interface GatekeeperDeps {
@@ -24,8 +51,12 @@ export interface GatekeeperDeps {
   readonly riskOf: (call: ToolCallIntent) => RiskLevel;
   /** 权限策略,默认 defaultPolicy */
   readonly policy?: Policy;
-  /** UI 审批桥:发起审批并等待用户决定(true=同意)*/
-  readonly requestApproval: (ask: ApprovalAsk) => Promise<boolean>;
+  /** UI 审批桥:发起审批并等待用户决定 */
+  readonly requestApproval: (ask: ApprovalAsk) => Promise<ApprovalDecision>;
+  /** 从调用提取记忆键;返回 null = 不可记忆。不提供则全部不可记忆(退化为旧的逐次审批)。 */
+  readonly rememberKeyOf?: (call: ToolCallIntent) => RememberKey | null;
+  /** 已记住允许的存储;不提供则不记忆。 */
+  readonly rememberStore?: RememberStore;
 }
 
 export function createGatekeeper(deps: GatekeeperDeps): Gatekeeper {
@@ -38,9 +69,14 @@ export function createGatekeeper(deps: GatekeeperDeps): Gatekeeper {
       if (verdict === "auto") return { allow: true };
       if (verdict === "deny") return { allow: false, reason: `策略禁止执行(风险:${riskLevel})` };
 
-      // verdict === "ask":发起审批并等待
-      const approved = await deps.requestApproval({ ...call, riskLevel });
-      return approved ? { allow: true } : { allow: false, reason: "用户拒绝了该操作" };
+      // verdict === "ask":先查「已记住允许」——同类操作此前已授权 → 直接放行,不打扰用户。
+      const key = deps.rememberKeyOf?.(call) ?? null;
+      if (key && deps.rememberStore?.has(key.id)) return { allow: true };
+
+      // 否则发起审批并等待;若用户选了「总是同意」,记下该类以后免问。
+      const decision = await deps.requestApproval({ ...call, riskLevel, rememberKey: key });
+      if (decision.approved && decision.remember && key) deps.rememberStore?.add(key.id, key.label);
+      return decision.approved ? { allow: true } : { allow: false, reason: "用户拒绝了该操作" };
     }
   };
 }

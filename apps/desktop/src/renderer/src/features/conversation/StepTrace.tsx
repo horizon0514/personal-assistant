@@ -16,6 +16,8 @@ export interface ActionRow {
   status: "running" | "awaiting" | "done" | "failed";
   summary?: string; // 关键参数摘要(如查询词 / 文件名)
   riskLevel?: string;
+  /** 可记忆操作的说明(如 "git commit 命令");存在则审批卡多一个「总是同意」按钮 */
+  rememberLabel?: string | null;
   error?: string;
   /** 执行中进度提示(如"扫描件:正在 OCR 识别…");仅 running 时显示 */
   note?: string;
@@ -32,7 +34,7 @@ export interface StepGroup {
 export interface TurnTraceProps {
   /** 同一轮里连续的若干 step 块 */
   groups: StepGroup[];
-  onApprove: (actionId: string, approved: boolean) => void;
+  onApprove: (actionId: string, approved: boolean, remember?: boolean) => void;
   /** 当前可撤销(LIFO 栈顶)的 actionId */
   undoableId?: string;
   /** 已撤销的 actionId 集合 */
@@ -165,7 +167,7 @@ function ActionLine({
   onView
 }: {
   a: ActionRow;
-  onApprove: (id: string, approved: boolean) => void;
+  onApprove: (id: string, approved: boolean, remember?: boolean) => void;
   undoable: boolean;
   reverted: boolean;
   onUndo: () => void;
@@ -197,6 +199,15 @@ function ActionLine({
               >
                 同意
               </button>
+              {a.rememberLabel && (
+                <button
+                  className="rounded-md bg-ember-100 px-2 py-0.5 text-[11px] font-medium text-ember-700 hover:bg-ember-200 dark:bg-ember-500/20 dark:text-ember-300 dark:hover:bg-ember-500/30"
+                  title={`以后「${a.rememberLabel}」不再询问`}
+                  onClick={() => onApprove(a.id, true, true)}
+                >
+                  总是同意
+                </button>
+              )}
               <button
                 className="rounded-md bg-stone-100 px-2 py-0.5 text-[11px] text-stone-500 hover:bg-stone-200 dark:bg-ink-700 dark:text-stone-200 dark:hover:bg-ink-600"
                 onClick={() => onApprove(a.id, false)}
