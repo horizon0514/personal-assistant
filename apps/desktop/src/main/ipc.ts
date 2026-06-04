@@ -52,9 +52,9 @@ export function registerIpc(): void {
   );
   ipcMain.on("chat:stop", (_e, sessionId: string) => agent.stop(sessionId));
 
-  // Trust:单工具审批
-  ipcMain.on("approval:resolve", (_e, p: { actionId: string; approved: boolean }) =>
-    agent.resolveApproval(p.actionId, p.approved)
+  // Trust:单工具审批(remember=用户点了「总是同意」→ 同类操作以后免审批)
+  ipcMain.on("approval:resolve", (_e, p: { actionId: string; approved: boolean; remember?: boolean }) =>
+    agent.resolveApproval(p.actionId, p.approved, p.remember ?? false)
   );
 
   // Reversibility:批量预览审批

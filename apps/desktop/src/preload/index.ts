@@ -90,6 +90,15 @@ export interface ApprovalRequest {
   capability: string;
   riskLevel: string;
   args: Record<string, unknown>;
+  /** 可记忆则带说明(如 "git commit 命令");UI 据此显示「总是同意」按钮。null=不可记忆。 */
+  rememberLabel?: string | null;
+}
+
+/** 已记住的「允许」操作条目(审批卡「总是同意」沉淀)。 */
+export interface AllowEntry {
+  id: string;
+  label: string;
+  at: number;
 }
 
 /** plan:request 负载:执行器起草的待确认开工计划。 */
@@ -218,9 +227,15 @@ const api = {
       ipcRenderer.on("approval:request", listener);
       return () => ipcRenderer.removeListener("approval:request", listener);
     },
-    /** 回传用户决定 */
-    resolve: (actionId: string, approved: boolean): void =>
-      ipcRenderer.send("approval:resolve", { actionId, approved })
+    /** 回传用户决定;remember=点了「总是同意」→ 同类操作以后免审批 */
+    resolve: (actionId: string, approved: boolean, remember = false): void =>
+      ipcRenderer.send("approval:resolve", { actionId, approved, remember })
+  },
+  /** 已记住的「允许」操作:设置面板查看/移除/清空 */
+  approvals: {
+    list: (): Promise<AllowEntry[]> => ipcRenderer.invoke("approvals:list"),
+    remove: (id: string): Promise<AllowEntry[]> => ipcRenderer.invoke("approvals:remove", id),
+    clear: (): Promise<AllowEntry[]> => ipcRenderer.invoke("approvals:clear")
   },
   batch: {
     /** 订阅批量改动预览请求 */

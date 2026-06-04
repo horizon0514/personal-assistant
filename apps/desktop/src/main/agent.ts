@@ -19,7 +19,14 @@ import {
   type PlanConfirmation
 } from "@pa/ctx-task";
 import { MemoryStore, createMemoryTools, memoryGuidelines, memoryToolNames } from "@pa/ctx-memory";
-import { createGatekeeper, riskClassifierFromMap, type ApprovalAsk } from "@pa/ctx-trust";
+import {
+  createGatekeeper,
+  riskClassifierFromMap,
+  type ApprovalAsk,
+  type ApprovalDecision,
+  type RememberKey
+} from "@pa/ctx-trust";
+import { rememberStore } from "./approval-allowlist";
 import { OperationJournal } from "@pa/ctx-reversibility";
 import {
   createModel,
@@ -356,7 +363,7 @@ const browserTools = createBrowserTools(browser);
 
 // ── 审批 / 批量 桥 ──────────────────────────────────────────
 let activeSender: WebContents | undefined;
-const pendingApprovals = new Map<string, (approved: boolean) => void>();
+const pendingApprovals = new Map<string, (decision: ApprovalDecision) => void>();
 const pendingBatches = new Map<string, (approved: boolean) => void>();
 // Work Plan:待确认的计划请求 + 每会话已确认的计划(供评估器取用)。
 const pendingPlans = new Map<string, (result: PlanConfirmation) => void>();
@@ -394,7 +401,7 @@ function broadcastJournal(): void {
   broadcast("reversibility:changed", journal.list());
 }
 
-function requestApproval(ask: ApprovalAsk): Promise<boolean> {
+function requestApproval(ask: ApprovalAsk): Promise<ApprovalDecision> {
   return new Promise((resolve) => {
     pendingApprovals.set(ask.actionId, resolve);
     sendTo("approval:request", {
@@ -402,9 +409,35 @@ function requestApproval(ask: ApprovalAsk): Promise<boolean> {
       tool: ask.tool,
       capability: ask.capability,
       riskLevel: ask.riskLevel,
-      args: ask.args
+      args: ask.args,
+      // 可记忆则带说明:UI 据此显示「总是同意」按钮(点了 → 同类操作以后免审批)。
+      rememberLabel: ask.rememberKey?.label ?? null
     });
   });
+}
+
+/**
+ * 从一次调用提取「记忆键」(同类操作的稳定标识),null = 不可记忆(始终逐次审批)。
+ * 粒度 = 命令头 + 子命令(改参数仍算同类);仅 shell / office 支持,其余工具暂逐次审批。
+ */
+function rememberKeyOf(call: { tool: string; args: Readonly<Record<string, unknown>> }): RememberKey | null {
+  if (call.tool === "exec_shell") {
+    const cmd = String(call.args.command ?? "").trim();
+    // 含管道/重定向/命令替换/链接的复合命令成分太杂,不归类记忆 —— 逐条问更安全。
+    if (!cmd || /[|&;<>`$]/.test(cmd)) return null;
+    const toks = cmd.split(/\s+/);
+    const head = toks[0];
+    const sub = toks[1] && !toks[1].startsWith("-") ? toks[1] : undefined;
+    const sig = sub ? `${head} ${sub}` : head;
+    return { id: `shell:${sig}`, label: `${sig} 命令` };
+  }
+  if (call.tool === "office_cli") {
+    const args = Array.isArray(call.args.args) ? (call.args.args as string[]) : [];
+    const sub = args.find((a) => !a.startsWith("-"))?.toLowerCase();
+    if (!sub) return null;
+    return { id: `office:${sub}`, label: `Office ${sub} 操作` };
+  }
+  return null;
 }
 function requestBatchApproval(req: { actionId: string; operations: FileChangeOp[] }): Promise<boolean> {
   return new Promise((resolve) => {
@@ -643,7 +676,9 @@ function buildAdapter(
           return classifyOfficeRisk(Array.isArray(call.args.args) ? (call.args.args as string[]) : []);
         return riskClassifierFromMap({ ...filesystemToolRisk, ...documentToolRisk, ...browserToolRisk })(call);
       },
-      requestApproval
+      requestApproval,
+      rememberKeyOf, // 同类操作此前点过「总是同意」→ 直接放行,不再弹审批
+      rememberStore
     }),
     capabilityOf,
     onAssistantDelta: (text) => {
@@ -909,11 +944,11 @@ export const agent = {
     }
   },
 
-  resolveApproval(actionId: string, approved: boolean): void {
+  resolveApproval(actionId: string, approved: boolean, remember = false): void {
     const resolve = pendingApprovals.get(actionId);
     if (resolve) {
       pendingApprovals.delete(actionId);
-      resolve(approved);
+      resolve({ approved, remember });
     }
   },
   resolveBatch(actionId: string, approved: boolean): void {
