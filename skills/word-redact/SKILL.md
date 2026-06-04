@@ -1,6 +1,8 @@
 ---
 name: word-redact
 description: 给 Word/Excel/PPT 文档脱敏——识别并替换姓名、手机、身份证、银行卡、邮箱、地址、单位等敏感信息,产出可外发的脱敏副本。底层用 office_cli 工具(OfficeCLI),免装 Office。
+safeShell:
+  - 'node *detect.mjs *'
 ---
 # 文档脱敏 Skill
 
@@ -51,7 +53,14 @@ officecli view /abs/原报告-脱敏.docx text
 ②③ 里边界模糊的(人名、公司名、内部代号),**把识别出的清单列给用户确认一眼再替换**——让用户拍板比你赌强。拿不准的,宁可抹掉。
 
 ### 纯本地模式(对隐私敏感时)
-③ 的人名/机构/地址若靠模型「通读全文」来找,文本会发给云端模型。**要求绝不外传时**,改走纯本地:① 的结构化 PII 全用正则(本就在本机);③ 用**本地 NER** 抓人名/机构/地点——见 `research/redact-local-ner`(transformers.js + ONNX,onnxruntime 本机 CPU 跑,文档不出本机)。它返回实体表面串,照样喂回下面的 `set --find/--replace`。这样全程零外传。
+③ 的人名/机构/地址若靠模型「通读全文」来找,文本会发给云端模型。**要求绝不外传时**,改走纯本地:① 的结构化 PII 全用正则(本就在本机);③ 用本 skill 自带的**本地 NER 脚本**抓人名/机构/地点(transformers.js + ONNX,onnxruntime 本机 CPU 跑,文本不出本机):
+```
+node {skill 目录}/detect.mjs "要检测的中文文本"
+```
+- 用 exec_shell 跑(已在 safeShell 放行,只读免审批);`{skill 目录}` 就是 use_skill 回报的本 skill 目录绝对路径。
+- 输出 JSON:`[{"type":"人名|机构|地点/地址","text":"表面串","score":..}]`。把这些 `text` 当字面值,喂回下面的 `set --find/--replace` 做化名/打码。
+- 首次运行会由 app 准备共享运行时(下依赖 + 模型权重,约一两分钟,仅一次);若报「找不到模块」多半是运行时还在装,稍等重试。
+- 文本很长就分段喂给脚本。结构化 PII(手机/身份证/邮箱…)仍走正则,别交给它。
 
 定位某类文本可用 query 的 `--find`(只读、不改):
 ```

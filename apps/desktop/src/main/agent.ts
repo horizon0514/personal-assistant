@@ -56,6 +56,7 @@ import { BrowserManager } from "./browser-manager";
 import { createSearchHistoryTool, searchHistoryToolName } from "./history-search";
 import { createScheduleTools, scheduleToolNames, scheduleGuidelines } from "./schedule-tools";
 import { schedules } from "./scheduler";
+import { ensureSkillRuntime } from "./skill-runtime";
 import {
   newConversationId,
   type Capability,
@@ -283,6 +284,16 @@ let activeSessionId = "";
 // Skill 热插拔根目录(用户可往里丢文件夹,无需重启即生效)。每轮 send 经 contextProvider 重扫。
 const SKILLS_DIR = join(app.getPath("userData"), "skills");
 mkdirSync(SKILLS_DIR, { recursive: true });
+
+// 带脚本的 Skill 共用的本地运行时:启动时预热(幂等+并发去重;无脚本 Skill 直接跳过,不浪费安装)。
+// 装好后会在 SKILLS_DIR 挂 node_modules 符号链接,脚本的 ESM import 即可解析到共享依赖。
+void ensureSkillRuntime({
+  runtimeRoot: join(app.getPath("userData"), "skill-runtime"),
+  skillsDir: SKILLS_DIR,
+  onProgress: (note) => console.log(`[skill-runtime] ${note}`)
+}).then((r) => {
+  if (!r.ok) console.warn(`[skill-runtime] 准备失败(脚本 Skill 将不可用): ${r.error}`);
+});
 
 // OCR 原生运行时(PaddleOCR 栈 ≈ 90–100MB)不随 app 包:打包后按需从 Release 下载到 userData。
 // dev/未打包:返回 null → cap-document 走 node_modules 里的 OCR 栈,不下载。
