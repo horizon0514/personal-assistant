@@ -18,12 +18,11 @@ body,
 }
 
 :root {
-  font-family: "Inter Variable", "Inter", "Noto Sans SC", -apple-system,
-    BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-    system-ui, sans-serif;
+  /* 系统字体:Mac→SF Pro,Windows→Segoe UI,中文交给系统(PingFang/雅黑)。原生感最强,且不打包字体。 */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable",
+    "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  font-feature-settings: "cv05", "ss01";
   /* 像原生客户端:默认箭头光标,不在文字/按钮上变 I-beam 或手型 */
   cursor: default;
   /* 原生感:UI 文字默认不可选;对话/记忆内容用 .select-text 放开 */
@@ -46,6 +45,20 @@ textarea,
   cursor: text;
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* 原生焦点环:键盘聚焦(:focus-visible,鼠标点击不触发)时一圈跟随系统强调色的环。
+   选择器带元素+伪类,特异度高过 Tailwind 的 outline-none(故能盖过组件里的 outline-none)。
+   品牌琥珀色边框(focus:border-ember)保留,与此并存。AccentColor 是 CSS 系统色,Chromium 原生支持。 */
+input:focus-visible,
+textarea:focus-visible,
+[contenteditable="true"]:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid AccentColor;
+  outline-offset: 1px;
 }
 
 /* 不透明,随系统主题自适应 */
@@ -103,26 +116,27 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* 原生细滚动条 */
-::-webkit-scrollbar {
+/* 细滚动条 —— 仅非 Mac。Mac 不写样式,交回系统原生 overlay 滚动条(随滚动淡出、不占布局宽度)。
+   平台由 main.tsx 按 navigator 写到 <html data-platform>。 */
+:root:not([data-platform="mac"]) ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-::-webkit-scrollbar-thumb {
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb {
   background: rgba(113, 113, 122, 0.3);
   border-radius: 9999px;
 }
-::-webkit-scrollbar-thumb:hover {
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:hover {
   background: rgba(113, 113, 122, 0.5);
 }
 @media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-thumb {
+  :root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.12);
   }
-  ::-webkit-scrollbar-thumb:hover {
+  :root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
   }
 }
-::-webkit-scrollbar-track {
+:root:not([data-platform="mac"]) ::-webkit-scrollbar-track {
   background: transparent;
 }
