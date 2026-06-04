@@ -10,17 +10,28 @@
  * - 中文 + 表格识别远强于 Tesseract(实测中文资助表的企业名/金额准确读出,conf~0.99)。纯本地、不出机、无 LLM、无 Python。
  * - 流水线:liteparse 把页面渲染成图 → PaddleOCR 读图(detection + recognition)。
  * - 模型(det+rec+dict ~21MB)**按需下载、不随 app 包**:首个扫描件触发时下到缓存目录(组合根注入 ocrModelDir),之后复用。
+ * - OCR 原生运行时(onnxruntime + canvas + opencv ≈ 90–100MB)**也按需下载、不随 app 包**(打包后注入 ocrRuntime):
+ *   首个扫描件触发时按平台下到 <userData>/ocr-runtime/<ver>,再从该目录动态加载——把 app 首装包瘦掉这一坨。
  *
  * docx/xlsx 需另装 LibreOffice,不在开箱即用范围,暂不支持。
  */
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { extname, join } from "node:path";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
 import { LiteParse, type ParseResult } from "@llamaindex/liteparse";
-import { PaddleOcrService } from "ppu-paddle-ocr";
+// PaddleOCR 栈(onnxruntime ~65MB + @napi-rs/canvas + opencv-js ≈ 90–100MB)不随 app 包:
+// 打包时从 electron-builder 排除,首个扫描件触发时按平台下载到 <userData>/ocr-runtime/<ver> 再加载。
+// 仅取类型(import type 运行时擦除,不引入运行时依赖);构造器经 ocrCtor() 动态 import 拿到。
+import type { PaddleOcrService } from "ppu-paddle-ocr";
+type PaddleModule = typeof import("ppu-paddle-ocr");
+type PaddleCtor = PaddleModule["PaddleOcrService"];
 
 const CAPABILITY: Capability = "document";
 
@@ -46,9 +57,25 @@ const MAX_OCR_PAGES = 20;
 /** 渲染给 OCR 的 DPI(200 实测对中文足够清晰)。 */
 const OCR_RENDER_DPI = 200;
 
+/**
+ * OCR 原生运行时(PaddleOCR 栈)的外置位置。组合根在「打包后」注入;dev/未打包时不传(null/undefined)
+ * → OCR 栈走常规模块解析(node_modules / 打包内),不下载。
+ */
+export interface OcrRuntime {
+  /** 解压目标目录(组合根注入,如 <userData>/ocr-runtime/<appVersion>);内含 node_modules/。 */
+  readonly dir: string;
+  /** 运行时压缩包 URL(平台+架构+版本特定的 .tar.gz,见 release workflow 产出)。 */
+  readonly url: string;
+}
+
 export interface DocumentToolsOptions {
   /** PaddleOCR 模型缓存目录(组合根注入,如 <userData>/paddleocr)。OCR 是基础能力,故必选。 */
   readonly ocrModelDir: string;
+  /**
+   * OCR 原生运行时外置位置(打包后注入)。不传则从常规模块解析加载 OCR 栈(dev)。
+   * 见 OcrRuntime。
+   */
+  readonly ocrRuntime?: OcrRuntime | null;
   /**
    * 执行中进度上报(actionId = execute 的第一个参数 = 渲染层 step 行 id)。
    * OCR(尤其首次下模型 / 逐页识别)耗时,经此把"正在识别…"亮给用户,避免看着像静默跳过。
@@ -135,12 +162,64 @@ async function ensurePaddleModels(dir: string): Promise<boolean> {
   return oks.every(Boolean);
 }
 
+// ── OCR 原生运行时外置:按需下载 + 解压,再从该目录动态加载 PaddleOCR 栈 ──────────
+const execFileAsync = promisify(execFile);
+
+// 运行时下载并发去重 + 就绪标记(.ready):标记在则视为已解压可用,跳过重复下载。
+let runtimeInflight: Promise<void> | null = null;
+function ensureOcrRuntime(rt: OcrRuntime): Promise<void> {
+  const ready = join(rt.dir, ".ready");
+  if (existsSync(ready)) return Promise.resolve();
+  if (!runtimeInflight) {
+    runtimeInflight = (async () => {
+      mkdirSync(rt.dir, { recursive: true });
+      const tmp = join(rt.dir, "runtime.tar.gz.tmp");
+      const res = await fetch(rt.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+      // 系统 tar 解压(mac/linux 自带;Windows 10 1803+ 自带 bsdtar)。包内顶层即 node_modules/。
+      await execFileAsync("tar", ["-xzf", tmp, "-C", rt.dir]);
+      rmSync(tmp, { force: true });
+      writeFileSync(ready, new Date().toISOString());
+    })().catch((err: unknown) => {
+      runtimeInflight = null;
+      throw err;
+    });
+  }
+  return runtimeInflight;
+}
+
+// PaddleOCR 构造器懒加载:打包后从外置运行时目录解析(createRequire 锚在该 node_modules,
+// 其传递依赖 onnxruntime-node/ppu-ocv 作为同级解析);dev/未外置则走常规模块解析。
+let ctorPromise: Promise<PaddleCtor> | null = null;
+function loadPaddleCtor(rt: OcrRuntime | null | undefined): Promise<PaddleCtor> {
+  if (!ctorPromise) {
+    ctorPromise = (async () => {
+      if (!rt) {
+        const mod = (await import("ppu-paddle-ocr")) as PaddleModule;
+        return mod.PaddleOcrService;
+      }
+      await ensureOcrRuntime(rt);
+      // createRequire 的锚文件无需真实存在,仅用于确定模块解析根(rt.dir/node_modules)。
+      const req = createRequire(join(rt.dir, "node_modules", "__pa_resolve__.cjs"));
+      const entry = req.resolve("ppu-paddle-ocr");
+      const mod = (await import(pathToFileURL(entry).href)) as PaddleModule;
+      return mod.PaddleOcrService;
+    })().catch((err: unknown) => {
+      ctorPromise = null;
+      throw err;
+    });
+  }
+  return ctorPromise;
+}
+
 let paddlePromise: Promise<PaddleOcrService> | null = null;
 /** 懒建 PaddleOCR 服务(加载原生 onnxruntime + 模型);初始化失败不缓存,下次可重试。 */
-function getPaddle(dir: string): Promise<PaddleOcrService> {
+function getPaddle(dir: string, rt: OcrRuntime | null | undefined): Promise<PaddleOcrService> {
   if (!paddlePromise) {
     paddlePromise = (async () => {
-      const svc = new PaddleOcrService({
+      const Ctor = await loadPaddleCtor(rt);
+      const svc = new Ctor({
         model: {
           detection: join(dir, "det.onnx"),
           recognition: join(dir, "rec.onnx"),
@@ -162,14 +241,23 @@ async function ocrScannedPdf(
   buf: Buffer,
   pageCount: number,
   modelRoot: string,
+  rt: OcrRuntime | null | undefined,
   onNote: (note: string) => void
 ): Promise<PageText[]> {
   const dir = join(modelRoot, MODEL_VARIANT); // 变体子目录,换模型自动重下
-  const needDownload = PADDLE_MODELS.some((m) => !existsSync(join(dir, m.file)));
-  onNote(needDownload ? "扫描件:首次需下载 OCR 模型(约 21MB),稍候…" : "扫描件:正在 OCR 识别…");
+  // 首次运行需联网:模型(~21MB)+(外置时)OCR 运行时(~90MB)都按需下载。
+  const needRuntime = !!rt && !existsSync(join(rt.dir, ".ready"));
+  const needModels = PADDLE_MODELS.some((m) => !existsSync(join(dir, m.file)));
+  onNote(
+    needRuntime
+      ? "扫描件:首次需下载 OCR 运行时(约 90MB),稍候…"
+      : needModels
+        ? "扫描件:首次需下载 OCR 模型(约 21MB),稍候…"
+        : "扫描件:正在 OCR 识别…"
+  );
   if (!(await ensurePaddleModels(dir))) return [];
 
-  const svc = await getPaddle(dir);
+  const svc = await getPaddle(dir, rt);
   const total = Math.min(pageCount || 1, MAX_OCR_PAGES);
   const nums = Array.from({ length: total }, (_, i) => i + 1);
   onNote(`扫描件:正在 OCR 识别(共 ${total} 页)…`);
@@ -224,7 +312,7 @@ export async function extractDocument(
 
     // 抽不到文本 = 扫描件/图片型 → PaddleOCR(按需下模型 + 逐页读图)。
     try {
-      const ocrPages = await ocrScannedPdf(buf, pageCount, opts.ocrModelDir, (note) =>
+      const ocrPages = await ocrScannedPdf(buf, pageCount, opts.ocrModelDir, opts.ocrRuntime, (note) =>
         opts.onProgress?.(actionId, note)
       );
       if (ocrPages.length) {

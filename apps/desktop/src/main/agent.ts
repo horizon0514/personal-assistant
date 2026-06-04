@@ -277,6 +277,29 @@ let activeSessionId = "";
 const SKILLS_DIR = join(app.getPath("userData"), "skills");
 mkdirSync(SKILLS_DIR, { recursive: true });
 
+// OCR 原生运行时(PaddleOCR 栈 ≈ 90–100MB)不随 app 包:打包后按需从 Release 下载到 userData。
+// dev/未打包:返回 null → cap-document 走 node_modules 里的 OCR 栈,不下载。
+// URL 指向「本 app 版本自己的 Release」附件(release workflow 按平台产出 ocr-runtime-<plat>-<arch>.tar.gz),
+// 故 app 与运行时版本天然一致。Intel Mac(darwin-x64)无对应附件 → 下载失败 → OCR 优雅降级(同现状)。
+const OCR_RELEASE_BASE = "https://github.com/horizon0514/personal-assistant/releases/download";
+function ocrRuntime(): { dir: string; url: string } | null {
+  if (!app.isPackaged) return null;
+  const version = app.getVersion();
+  const platform = `${process.platform}-${process.arch}`;
+  return {
+    dir: join(app.getPath("userData"), "ocr-runtime", version),
+    url: `${OCR_RELEASE_BASE}/v${version}/ocr-runtime-${platform}.tar.gz`
+  };
+}
+/** 组合根:统一构造 cap-document 的 OCR 选项(模型缓存目录 + 外置运行时 + 可选进度回调)。 */
+function ocrDocOptions(onProgress?: (actionId: string, note: string) => void): {
+  ocrModelDir: string;
+  ocrRuntime: { dir: string; url: string } | null;
+  onProgress?: (actionId: string, note: string) => void;
+} {
+  return { ocrModelDir: join(app.getPath("userData"), "paddleocr"), ocrRuntime: ocrRuntime(), onProgress };
+}
+
 migrateLegacyMemory();
 
 /** 旧版全局 memory.json → 并入默认 workspace(只做一次)。 */
@@ -424,12 +447,11 @@ function buildAdapter(
   const background = opts.background ?? false;
   const memory = getMemory(wsId);
   const model = createModel({ provider: PROVIDER, modelId: MODEL });
-  // 文档工具:OCR 是基础能力,模型缓存目录固定注入;onProgress 把"正在识别/下载"亮到 step 行。
-  const ocrModelDir = join(app.getPath("userData"), "paddleocr");
+  // 文档工具:OCR 是基础能力;模型缓存 + 外置运行时经 ocrDocOptions 注入;onProgress 把"正在识别/下载"亮到 step 行。
   const onDocProgress = (actionId: string, note: string): void => {
     if (!background) sendTo("step:progress", { actionId, note });
   };
-  const documentTools = createDocumentTools({ ocrModelDir, onProgress: onDocProgress });
+  const documentTools = createDocumentTools(ocrDocOptions(onDocProgress));
   // Office 工具:OfficeCLI 二进制按需下载到缓存目录(组合根注入);onProgress 把"正在下载运行时"亮到 step 行。
   const officeBinDir = join(app.getPath("userData"), "officecli");
   const officeTools = createOfficeTools({ officeBinDir, onProgress: onDocProgress });
@@ -437,7 +459,7 @@ function buildAdapter(
   // onChange → 广播 notebook:changed,agent 在对话里增删来源时左侧面板实时刷新。
   const notebookTools = createNotebookTools(
     getNotebook(wsId),
-    (path, actionId) => extractDocument(path, { ocrModelDir, onProgress: onDocProgress }, actionId),
+    (path, actionId) => extractDocument(path, ocrDocOptions(onDocProgress), actionId),
     () => broadcastNotebooks(wsId)
   );
 
@@ -946,10 +968,9 @@ export const agent = {
   },
   /** UI 加来源(选文件/拖入触发):复用与对话工具同一条入库逻辑(抽取+去重+留痕)。 */
   async addNotebookSource(wsId: string, notebook: string, path: string) {
-    const ocrModelDir = join(app.getPath("userData"), "paddleocr");
     const r = await addSourceToNotebook(
       getNotebook(wsId),
-      (p, actionId) => extractDocument(p, { ocrModelDir }, actionId),
+      (p, actionId) => extractDocument(p, ocrDocOptions(), actionId),
       notebook,
       path
     );
