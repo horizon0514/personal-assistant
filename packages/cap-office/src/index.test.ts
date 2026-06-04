@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyOfficeRisk, createOfficeTools, officeToolNames } from "./index";
+import { classifyOfficeRisk, createOfficeTools, disposeOffice, officeToolNames } from "./index";
 
 describe("classifyOfficeRisk", () => {
   it.each([
@@ -56,5 +56,9 @@ describe("createOfficeTools", () => {
       details: { error?: string };
     };
     expect(r.details.error).toBe("empty args");
+  });
+
+  it("没用过 Office 时 disposeOffice 立即返回(零开销、不抛)", async () => {
+    await expect(disposeOffice()).resolves.toBeUndefined();
   });
 });

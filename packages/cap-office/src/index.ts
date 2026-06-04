@@ -72,6 +72,14 @@ function isMuslLibc(): boolean {
 const inflight = new Map<string, Promise<string | null>>();
 
 /**
+ * 退出清理用的进程内状态:
+ * - resolvedBin:已就位的二进制绝对路径(disposeOffice 用它去 close 常驻进程)。
+ * - openedDocs:本进程操作过、可能起了常驻进程的文档(OfficeCLI 的 create/open 等会留后台常驻加速后续命令)。
+ */
+let resolvedBin: string | null = null;
+const openedDocs = new Set<string>();
+
+/**
  * 确保 OfficeCLI 二进制就位,返回其绝对路径(下载失败 → null)。
  * 缓存到 <binRoot>/<version>/<asset>:带版本子目录,换版自动走新目录重下、旧的不被误用。
  */
@@ -79,7 +87,10 @@ function ensureOfficeBinary(binRoot: string, onNote: (note: string) => void): Pr
   const asset = resolveAssetName();
   const dir = join(binRoot, OFFICECLI_VERSION);
   const dest = join(dir, asset);
-  if (existsSync(dest)) return Promise.resolve(dest);
+  if (existsSync(dest)) {
+    resolvedBin = dest;
+    return Promise.resolve(dest);
+  }
 
   let p = inflight.get(dest);
   if (!p) {
@@ -92,6 +103,7 @@ function ensureOfficeBinary(binRoot: string, onNote: (note: string) => void): Pr
       writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
       if (!IS_WINDOWS) chmodSync(tmp, 0o755); // 裸可执行文件:补可执行位
       renameSync(tmp, dest);
+      resolvedBin = dest;
       return dest;
     })()
       .catch((err: unknown) => {
@@ -123,6 +135,11 @@ const READONLY_SUBCOMMANDS: ReadonlySet<string> = new Set([
 /** 取第一个非选项 token 作为子命令(officecli <sub> <file> …;子命令在最前)。 */
 function subcommandOf(args: readonly string[]): string | undefined {
   return args.find((a) => !a.startsWith("-"));
+}
+
+/** 参数里所有像 Office 文档的 token(.docx/.xlsx/.pptx)。用于追踪开了哪些常驻进程,退出时收掉。 */
+function officeFilesIn(args: readonly string[]): string[] {
+  return args.filter((a) => /\.(docx|xlsx|pptx)$/i.test(a));
 }
 
 /**
@@ -267,6 +284,8 @@ function createOfficeCliTool(opts: OfficeToolsOptions): AgentTool<typeof officeP
 
       const t = Math.min(timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
       const dir = cwd ?? homedir();
+      // 记下涉及的文档:OfficeCLI 多数命令会留后台常驻进程,退出时 disposeOffice 逐个 close 收掉。
+      for (const f of officeFilesIn(args)) openedDocs.add(f);
       const r = await runOffice(bin, args, dir, t, signal);
 
       const out = clip(r.stdout, MAX_STDOUT_CHARS);
@@ -293,6 +312,24 @@ function createOfficeCliTool(opts: OfficeToolsOptions): AgentTool<typeof officeP
 /** 创建 Office 工具集(office_cli)。officeBinDir = OfficeCLI 二进制缓存目录(组合根注入)。 */
 export function createOfficeTools(opts: OfficeToolsOptions): AgentTool<any>[] {
   return [createOfficeCliTool(opts)];
+}
+
+/**
+ * 退出清理:收掉本进程操作文档时 OfficeCLI 留下的后台常驻进程(它们会 re-parent 到 init,
+ * 不随本进程退出而消失 → 不收会泄漏)。对每个开过的文档跑一次 `officecli close <file>`,
+ * 全程封一个总时限(默认 3s),绝不阻塞 app 退出。从没用过 Office(无二进制/无文档)则立即返回。
+ * 调用后清空记录,可安全重复调用。
+ */
+export async function disposeOffice(deadlineMs = 3_000): Promise<void> {
+  const bin = resolvedBin;
+  if (!bin || openedDocs.size === 0) return;
+  const files = [...openedDocs];
+  openedDocs.clear();
+  const closeAll = Promise.all(
+    files.map((f) => runOffice(bin, ["close", f], homedir(), deadlineMs)) // runOffice 永不 reject
+  );
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, deadlineMs));
+  await Promise.race([closeAll.then(() => undefined), deadline]);
 }
 
 export const officeToolNames: ReadonlySet<string> = new Set(["office_cli"]);
