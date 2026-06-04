@@ -62,3 +62,36 @@ jobs:
         env:
           # GitHub Release 上传凭证(自动注入,无需手动配置)。
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # OCR 原生运行时(PaddleOCR 栈)不随 app 包,改为按平台单独产出、随 Release 分发,
+      # 由 app 首个扫描件触发时按需下载(见 packages/cap-document)。
+      # 在干净临时目录里 npm 安装 OCR 闭包(npm 扁平 node_modules + 平台 optional 二进制),打成 tar.gz。
+      # 注:版本须与 pnpm-lock.yaml 对齐(ppu-paddle-ocr 5.8.3 / onnxruntime-node 1.26.0);
+      # onnxruntime-node 的 napi 版本须与 Electron 的 Node ABI 兼容(napi 向后兼容,当前 napi-v6 OK)。
+      - name: Build & upload OCR runtime
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # runner.os/arch → node 的 process.platform/arch(app 据此拼下载文件名)。
+          case "${{ runner.os }}" in
+            macOS) NODE_PLATFORM=darwin ;;
+            Windows) NODE_PLATFORM=win32 ;;
+            Linux) NODE_PLATFORM=linux ;;
+          esac
+          case "${{ runner.arch }}" in
+            X64) NODE_ARCH=x64 ;;
+            ARM64) NODE_ARCH=arm64 ;;
+          esac
+          ASSET="ocr-runtime-${NODE_PLATFORM}-${NODE_ARCH}.tar.gz"
+
+          RT="${RUNNER_TEMP}/ocr-rt"
+          rm -rf "$RT"; mkdir -p "$RT"
+          ( cd "$RT" && npm init -y >/dev/null \
+            && npm install --no-audit --no-fund --omit=dev \
+                 ppu-paddle-ocr@5.8.3 onnxruntime-node@1.26.0 )
+
+          # 顶层即 node_modules/(app 解压到 <userData>/ocr-runtime/<ver> 后,createRequire 锚在此解析)。
+          tar -czf "$ASSET" -C "$RT" node_modules
+          gh release upload "${{ github.ref_name }}" "$ASSET" --clobber

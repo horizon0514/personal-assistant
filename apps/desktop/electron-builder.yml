@@ -29,13 +29,21 @@ files:
   - "!**/node_modules/@anthropic-ai/**"
   - "!**/node_modules/@aws-sdk/**"
   - "!**/node_modules/@smithy/**"
+  # OCR 栈(PaddleOCR)整坨外置、不随包(~90–100MB):onnxruntime-node(~65MB)+ @napi-rs/canvas(原生)
+  # + @techstark/opencv-js(wasm)+ ppu-ocv/ppu-paddle-ocr 胶水。首个扫描件触发时按平台从 Release 下载到
+  # <userData>/ocr-runtime/<ver>,由 cap-document 动态加载(见 packages/cap-document)。把 app 首装包瘦掉这一坨。
+  - "!**/node_modules/onnxruntime-node/**"
+  - "!**/node_modules/onnxruntime-common/**"
+  - "!**/node_modules/ppu-paddle-ocr/**"
+  - "!**/node_modules/ppu-ocv/**"
+  - "!**/node_modules/@napi-rs/canvas*/**"
+  - "!**/node_modules/@techstark/opencv-js/**"
 
 # 原生模块解包:无法从 app.asar 内 dlopen 的原生库必须解包到 app.asar.unpacked。
 # - liteparse:.node(napi) + libpdfium 动态库(主包 + 各平台 optional 包)。
-# - onnxruntime-node:PaddleOCR 的推理后端,.node + libonnxruntime 动态库。
+#   (onnxruntime-node 已外置、不在包内,故无需在此解包。)
 asarUnpack:
   - "**/node_modules/@llamaindex/liteparse*/**"
-  - "**/node_modules/onnxruntime-node/**"
 
 directories:
   output: release/${version}
@@ -45,12 +53,9 @@ directories:
 
 mac:
   category: public.app-category.productivity
-  # onnxruntime-node 自带全平台原生库(~255MB);mac 包只留 darwin,剔除 win32/linux(省 ~190MB)。
-  # 注意:onnxruntime-node 的 darwin 只有 arm64,没有 x64 —— Intel Mac(x64)上 PaddleOCR 不可用,
-  # 扫描件 OCR 会优雅降级回"抽不出"(不崩)。若要支持 Intel Mac 需另寻 x64 二进制或砍掉 x64 target。
-  files:
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/win32/**"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+  # OCR 栈已整坨外置(见上 files 排除),不再随包,故无需在此做 onnxruntime 的平台裁剪。
+  # 注意:外置运行时的 darwin 只有 arm64,没有 x64 —— Intel Mac(x64)拉不到对应附件,
+  # 扫描件 OCR 会优雅降级回"抽不出"(不崩)。若要支持 Intel Mac 需另产 x64 运行时包。
   target:
     - target: dmg
       arch:
@@ -68,10 +73,7 @@ mac:
   gatekeeperAssess: false
 
 win:
-  # 同上:win 包只留 win32 的 onnxruntime,剔除 darwin/linux。
-  files:
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
-    - "!**/node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+  # OCR 栈已整坨外置(见上 files 排除),不随包。
   target:
     - target: nsis
       arch:
