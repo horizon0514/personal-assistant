@@ -8,11 +8,6 @@ import { SourceReader } from "./SourceReader";
  * 左栏 = 知识库树(库 → 展开看来源);右栏 = 选中来源的逐页全文。
  * 增删来源:UI 选文件/拖入(→ 抽取入库)或在对话里让 agent 加;经 notebook:changed 实时同步。
  */
-/** 绝对路径 → file:// URL(逐段编码,处理空格/特殊字符)。 */
-function toFileUrl(path: string): string {
-  return "file://" + path.split("/").map(encodeURIComponent).join("/");
-}
-
 export function NotebookManager({ workspaceId, onClose }: { workspaceId: string; onClose: () => void }): JSX.Element {
   const [notebooks, setNotebooks] = useState<NotebookView[]>([]);
   const [openNb, setOpenNb] = useState<string>("");
@@ -251,7 +246,7 @@ export function NotebookManager({ workspaceId, onClose }: { workspaceId: string;
                   {view === "original" ? (
                     <webview
                       key={selected.source.id}
-                      src={toFileUrl(selected.source.path)}
+                      src={window.pa.files.toFileUrl(selected.source.path)}
                       plugins
                       className="h-full w-full"
                       style={{ width: "100%", height: "100%" }}
