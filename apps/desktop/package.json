@@ -32,6 +32,7 @@
     "@pa/cap-browser": "workspace:*",
     "@pa/cap-document": "workspace:*",
     "@pa/cap-filesystem": "workspace:*",
+    "@pa/cap-office": "workspace:*",
     "@pa/cap-shell": "workspace:*",
     "@pa/ctx-memory": "workspace:*",
     "@pa/ctx-notebook": "workspace:*",

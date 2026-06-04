@@ -35,7 +35,8 @@ export type Capability =
   | "document"
   | "notebook"
   | "shell"
-  | "schedule";
+  | "schedule"
+  | "office";
 
 /** Action 风险分级(Trust & Governance 的核心值对象)*/
 export type RiskLevel =

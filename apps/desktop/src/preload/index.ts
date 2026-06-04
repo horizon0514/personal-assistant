@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+import { pathToFileURL } from "node:url";
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import type { DomainEvent } from "@pa/domain-core";
 import type { JournalView } from "@pa/ctx-reversibility";
@@ -160,7 +162,11 @@ const api = {
   files: {
     pathForDropped: (file: File): string => webUtils.getPathForFile(file),
     /** 系统文件选择框:选任意文件作为聊天附件,返回绝对路径数组(取消则空)。 */
-    pick: (): Promise<string[]> => ipcRenderer.invoke("dialog:pickFiles")
+    pick: (): Promise<string[]> => ipcRenderer.invoke("dialog:pickFiles"),
+    /** 绝对路径 → file:// URL(用 Node pathToFileURL,正确处理盘符/UNC/特殊字符,跨平台)。 */
+    toFileUrl: (path: string): string => pathToFileURL(path).href,
+    /** 绝对路径的文件名(跨平台,处理 / 与 \\)。 */
+    basename: (path: string): string => basename(path)
   },
   chat: {
     send: (sessionId: string, text: string, attachments?: string[]): void =>

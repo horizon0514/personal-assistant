@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { app, BrowserWindow, ipcMain, nativeTheme, Notification } from "electron";
 import { registerIpc } from "./ipc";
 import { agent } from "./agent";
+import { disposeOffice } from "@pa/cap-office";
 import { getMainWindow, setMainWindow } from "./main-window";
 import { installAppMenu } from "./menu";
 import { appSettings, type ThemeSource } from "./app-settings";
@@ -164,4 +165,15 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// 退出前收掉 OfficeCLI 留下的后台常驻进程(它们会 re-parent 到 init,不随本进程消失)。
+// before-quit 不能被 Electron await,故先拦下、跑清理(自带 3s 总时限,绝不卡退出)、再真正退。
+// 没用过 Office 时 disposeOffice 立即返回,这条路径零开销。
+let officeCleaned = false;
+app.on("before-quit", (e) => {
+  if (officeCleaned) return;
+  e.preventDefault();
+  officeCleaned = true;
+  void disposeOffice().finally(() => app.quit());
 });

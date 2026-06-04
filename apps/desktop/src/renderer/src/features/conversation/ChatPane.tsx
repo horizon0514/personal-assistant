@@ -338,7 +338,7 @@ export function ChatPane(): JSX.Element {
   const pickAttachments = (): void => {
     setNbPickerOpen(false);
     void window.pa.files.pick().then((paths) => {
-      const next = paths.map((p) => ({ name: p.split("/").pop() || p, path: p })).filter((a) => a.path);
+      const next = paths.map((p) => ({ name: window.pa.files.basename(p), path: p })).filter((a) => a.path);
       if (next.length) setAttachments((prev) => [...prev, ...next]);
     });
   };
