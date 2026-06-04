@@ -2,13 +2,14 @@ import "./app-identity"; // 必须最先执行:设 app 名与 userData 目录(�
 import { join } from "node:path";
 import { userInfo } from "node:os";
 import { execFileSync } from "node:child_process";
-import { app, BrowserWindow, ipcMain, nativeTheme, Notification } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, Notification, screen } from "electron";
 import { registerIpc } from "./ipc";
 import { agent } from "./agent";
 import { disposeOffice } from "@pa/cap-office";
 import { getMainWindow, setMainWindow } from "./main-window";
-import { installAppMenu } from "./menu";
-import { appSettings, type ThemeSource } from "./app-settings";
+import { installAppMenu, installContextMenu } from "./menu";
+import { appSettings, type ThemeSource, type WindowBounds } from "./app-settings";
+import { approvalAllowlist } from "./approval-allowlist";
 import { initAutoUpdate, checkForUpdatesManual } from "./updater";
 import { startScheduler, schedules } from "./scheduler";
 import type { ScheduleRecord } from "@pa/infra";
@@ -46,14 +47,28 @@ function openSettings(): void {
   });
   settingsWin.once("ready-to-show", () => settingsWin?.show());
   settingsWin.on("closed", () => (settingsWin = undefined));
+  installContextMenu(settingsWin.webContents);
   loadEntry(settingsWin, "settings.html");
+}
+
+const DEFAULT_BOUNDS: WindowBounds = { width: 1200, height: 800 };
+
+/** 保存的窗口位置若整体落在所有显示器之外(换了显示器/分辨率),丢弃 x/y 由系统居中,只留尺寸。 */
+function sanitizeBounds(b: WindowBounds): WindowBounds {
+  if (b.x == null || b.y == null) return { width: b.width, height: b.height };
+  const onScreen = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x! < a.x + a.width && b.x! + b.width > a.x && b.y! < a.y + a.height && b.y! + b.height > a.y;
+  });
+  return onScreen ? b : { width: b.width, height: b.height };
 }
 
 function createWindow(): void {
   const isMac = process.platform === "darwin";
+  const saved = appSettings.getWindowBounds();
+  const bounds = sanitizeBounds(saved ?? DEFAULT_BOUNDS);
   const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    ...bounds, // 恢复上次尺寸/位置(原生应用都记忆)
     minWidth: 900,
     minHeight: 600,
     title: "Akari",
@@ -72,6 +87,9 @@ function createWindow(): void {
   });
 
   win.once("ready-to-show", () => win.show());
+  // 关窗前记住尺寸/位置(getNormalBounds:最大化/全屏时取还原后的尺寸,不存全屏值)。
+  win.on("close", () => appSettings.setWindowBounds(win.getNormalBounds()));
+  installContextMenu(win.webContents);
   setMainWindow(win);
   loadEntry(win, "index.html");
 }
@@ -107,6 +125,16 @@ ipcMain.handle("settings:getTheme", () => appSettings.getTheme());
 ipcMain.handle("settings:setTheme", (_e, theme: ThemeSource) => {
   appSettings.setTheme(theme);
   return appSettings.getTheme();
+});
+// 已记住的「允许」操作:设置面板查看/移除/清空(对应审批卡的「总是同意」)
+ipcMain.handle("approvals:list", () => approvalAllowlist.list());
+ipcMain.handle("approvals:remove", (_e, id: string) => {
+  approvalAllowlist.remove(id);
+  return approvalAllowlist.list();
+});
+ipcMain.handle("approvals:clear", () => {
+  approvalAllowlist.clear();
+  return approvalAllowlist.list();
 });
 
 // 主题/系统外观变化 → 所有窗口同步底色(单一监听,避免每窗累积)
