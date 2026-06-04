@@ -50,6 +50,9 @@ officecli view /abs/原报告-脱敏.docx text
 ### 列清单给用户过目
 ②③ 里边界模糊的(人名、公司名、内部代号),**把识别出的清单列给用户确认一眼再替换**——让用户拍板比你赌强。拿不准的,宁可抹掉。
 
+### 纯本地模式(对隐私敏感时)
+③ 的人名/机构/地址若靠模型「通读全文」来找,文本会发给云端模型。**要求绝不外传时**,改走纯本地:① 的结构化 PII 全用正则(本就在本机);③ 用**本地 NER** 抓人名/机构/地点——见 `research/redact-local-ner`(transformers.js + ONNX,onnxruntime 本机 CPU 跑,文档不出本机)。它返回实体表面串,照样喂回下面的 `set --find/--replace`。这样全程零外传。
+
 定位某类文本可用 query 的 `--find`(只读、不改):
 ```
 officecli query /abs/原报告-脱敏.docx run --find "@"   # 找含 @ 的(邮箱)
