@@ -95,3 +95,33 @@ jobs:
           # 顶层即 node_modules/(app 解压到 <userData>/ocr-runtime/<ver> 后,createRequire 锚在此解析)。
           tar -czf "$ASSET" -C "$RT" node_modules
           gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
+
+      # 脚本 Skill 共享运行时(@huggingface/transformers + 平台原生 onnxruntime)不随 app 包,
+      # 同 OCR:按平台产出 tar.gz 随 Release 分发,用户首个脚本 Skill 触发时按需下载解压
+      # (见 apps/desktop/src/main/skill-runtime.ts)。依赖集须与 SKILL_RUNTIME_DEPS 对齐(@huggingface/transformers 4.2.0),改依赖两处同步。
+      - name: Build & upload Skill runtime
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            macOS) NODE_PLATFORM=darwin ;;
+            Windows) NODE_PLATFORM=win32 ;;
+            Linux) NODE_PLATFORM=linux ;;
+          esac
+          case "${{ runner.arch }}" in
+            X64) NODE_ARCH=x64 ;;
+            ARM64) NODE_ARCH=arm64 ;;
+          esac
+          ASSET="skill-runtime-${NODE_PLATFORM}-${NODE_ARCH}.tar.gz"
+
+          RT="${RUNNER_TEMP}/skill-rt"
+          rm -rf "$RT"; mkdir -p "$RT"
+          ( cd "$RT" && npm init -y >/dev/null \
+            && npm install --no-audit --no-fund --omit=dev \
+                 @huggingface/transformers@4.2.0 )
+
+          # 顶层即 node_modules/(app 解压到 <userData>/skill-runtime/<depsHash> 后,skills 根符号链接指向它)。
+          tar -czf "$ASSET" -C "$RT" node_modules
+          gh release upload "${{ github.ref_name }}" "$ASSET" --clobber

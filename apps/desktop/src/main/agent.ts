@@ -285,28 +285,20 @@ let activeSessionId = "";
 const SKILLS_DIR = join(app.getPath("userData"), "skills");
 mkdirSync(SKILLS_DIR, { recursive: true });
 
-// 带脚本的 Skill 共用的本地运行时:启动时预热(幂等+并发去重;无脚本 Skill 直接跳过,不浪费安装)。
-// 装好后会在 SKILLS_DIR 挂 node_modules 符号链接,脚本的 ESM import 即可解析到共享依赖。
-void ensureSkillRuntime({
-  runtimeRoot: join(app.getPath("userData"), "skill-runtime"),
-  skillsDir: SKILLS_DIR,
-  onProgress: (note) => console.log(`[skill-runtime] ${note}`)
-}).then((r) => {
-  if (!r.ok) console.warn(`[skill-runtime] 准备失败(脚本 Skill 将不可用): ${r.error}`);
-});
+// 「本 app 版本自己的 Release」附件下载基址。OCR 运行时 / 脚本 Skill 运行时都从这里按平台取,
+// 故 app 与各运行时版本天然一致。
+const RELEASE_DL_BASE = "https://github.com/horizon0514/personal-assistant/releases/download";
 
 // OCR 原生运行时(PaddleOCR 栈 ≈ 90–100MB)不随 app 包:打包后按需从 Release 下载到 userData。
 // dev/未打包:返回 null → cap-document 走 node_modules 里的 OCR 栈,不下载。
-// URL 指向「本 app 版本自己的 Release」附件(release workflow 按平台产出 ocr-runtime-<plat>-<arch>.tar.gz),
-// 故 app 与运行时版本天然一致。Intel Mac(darwin-x64)无对应附件 → 下载失败 → OCR 优雅降级(同现状)。
-const OCR_RELEASE_BASE = "https://github.com/horizon0514/personal-assistant/releases/download";
+// release workflow 按平台产出 ocr-runtime-<plat>-<arch>.tar.gz;Intel Mac(darwin-x64)无对应附件 → 优雅降级。
 function ocrRuntime(): { dir: string; url: string } | null {
   if (!app.isPackaged) return null;
   const version = app.getVersion();
   const platform = `${process.platform}-${process.arch}`;
   return {
     dir: join(app.getPath("userData"), "ocr-runtime", version),
-    url: `${OCR_RELEASE_BASE}/v${version}/ocr-runtime-${platform}.tar.gz`
+    url: `${RELEASE_DL_BASE}/v${version}/ocr-runtime-${platform}.tar.gz`
   };
 }
 /** 组合根:统一构造 cap-document 的 OCR 选项(模型缓存目录 + 外置运行时 + 可选进度回调)。 */
@@ -317,6 +309,22 @@ function ocrDocOptions(onProgress?: (actionId: string, note: string) => void): {
 } {
   return { ocrModelDir: join(app.getPath("userData"), "paddleocr"), ocrRuntime: ocrRuntime(), onProgress };
 }
+
+// 脚本 Skill 共享运行时:打包后从本版本 Release 下预构建 tar(含对应平台原生 onnxruntime),用户机器免 npm;
+// dev 返回 undefined → ensureSkillRuntime 走本机 npm install。启动时预热(幂等+去重;无脚本 Skill 直接跳过)。
+function skillRuntimeTarballUrl(): string | undefined {
+  if (!app.isPackaged) return undefined;
+  const version = app.getVersion();
+  return `${RELEASE_DL_BASE}/v${version}/skill-runtime-${process.platform}-${process.arch}.tar.gz`;
+}
+void ensureSkillRuntime({
+  runtimeRoot: join(app.getPath("userData"), "skill-runtime"),
+  skillsDir: SKILLS_DIR,
+  tarballUrl: skillRuntimeTarballUrl(),
+  onProgress: (note) => console.log(`[skill-runtime] ${note}`)
+}).then((r) => {
+  if (!r.ok) console.warn(`[skill-runtime] 准备失败(脚本 Skill 将不可用): ${r.error}`);
+});
 
 migrateLegacyMemory();
 
