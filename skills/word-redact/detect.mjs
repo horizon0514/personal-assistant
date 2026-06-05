@@ -21,10 +21,24 @@ env.cacheDir = new URL("./.models", import.meta.url).pathname; // 权重缓存�
 
 const MODEL = "Xenova/bert-base-multilingual-cased-ner-hrl";
 const LABEL_ZH = { PER: "人名", ORG: "机构", LOC: "地点/地址" };
+// 模型权重默认从 HuggingFace 下;连不上(如国内网络)则切国内镜像。仅换权重来源,待检测文本始终不出本机。
+// 也可用环境变量 HF_ENDPOINT 显式指定镜像。
+const HF_MIRROR = process.env.HF_ENDPOINT || "https://hf-mirror.com";
+
+/** 加载 NER 流水线:先走默认 HF,失败(网络/超时)切镜像重试一次。 */
+async function loadNer() {
+  try {
+    return await pipeline("token-classification", MODEL);
+  } catch (e) {
+    console.error(`[detect] HuggingFace 拉取失败(${e instanceof Error ? e.message : e}),改用镜像 ${HF_MIRROR} 重试…`);
+    env.remoteHost = HF_MIRROR;
+    return await pipeline("token-classification", MODEL);
+  }
+}
 
 /** 检测人名/机构/地点,返回去重后的实体表面串(脱敏宁可多召回,阈值默认放低)。 */
 export async function detectEntities(text, threshold = 0.5) {
-  const ner = await pipeline("token-classification", MODEL);
+  const ner = await loadNer();
   const raw = await ner(text, { aggregation_strategy: "simple" });
   const seen = new Map();
   for (const e of raw) {
