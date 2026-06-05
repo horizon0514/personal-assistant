@@ -57,6 +57,7 @@ import { createSearchHistoryTool, searchHistoryToolName } from "./history-search
 import { createScheduleTools, scheduleToolNames, scheduleGuidelines } from "./schedule-tools";
 import { schedules } from "./scheduler";
 import { ensureSkillRuntime } from "./skill-runtime";
+import { seedBundledSkills } from "./seed-skills";
 import {
   newConversationId,
   type Capability,
@@ -284,6 +285,9 @@ let activeSessionId = "";
 // Skill 热插拔根目录(用户可往里丢文件夹,无需重启即生效)。每轮 send 经 contextProvider 重扫。
 const SKILLS_DIR = join(app.getPath("userData"), "skills");
 mkdirSync(SKILLS_DIR, { recursive: true });
+// 把随包内置 Skill(如 word-redact)播种进来——必须早于 ensureSkillRuntime / 首次 scanSkills,
+// 否则刚装的机器扫不到内置脚本 Skill,运行时也不会预热。用户自加/自改的不受影响。
+seedBundledSkills(SKILLS_DIR);
 
 // 「本 app 版本自己的 Release」附件下载基址。OCR 运行时 / 脚本 Skill 运行时都从这里按平台取,
 // 故 app 与各运行时版本天然一致。

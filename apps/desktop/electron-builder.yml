@@ -39,6 +39,17 @@ files:
   - "!**/node_modules/@napi-rs/canvas*/**"
   - "!**/node_modules/@techstark/opencv-js/**"
 
+# 随包内置 Skill:repo 根的 skills/(在 apps/desktop 之外)放到 resources/skills,
+# 启动时由 seed-skills 播种进 <userData>/skills(见 apps/desktop/src/main/seed-skills.ts)。
+# 排除 node_modules(运行时另装,见 skill-runtime)与 .models(模型权重缓存,不随包)。
+extraResources:
+  - from: ../../skills
+    to: skills
+    filter:
+      - "**/*"
+      - "!**/node_modules/**"
+      - "!**/.models/**"
+
 # 原生模块解包:无法从 app.asar 内 dlopen 的原生库必须解包到 app.asar.unpacked。
 # - liteparse:.node(napi) + libpdfium 动态库(主包 + 各平台 optional 包)。
 #   (onnxruntime-node 已外置、不在包内,故无需在此解包。)
