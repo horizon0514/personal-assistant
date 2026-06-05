@@ -116,27 +116,27 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* 细滚动条 —— 仅非 Mac。Mac 不写样式,交回系统原生 overlay 滚动条(随滚动淡出、不占布局宽度)。
-   平台由 main.tsx 按 navigator 写到 <html data-platform>。 */
-:root:not([data-platform="mac"]) ::-webkit-scrollbar {
+/* 细滚动条(全平台统一)。注:Mac 上不写样式并不会自动得到系统 overlay 滚动条——
+   Electron/Chromium 默认是难看的粗灰条,故仍用这套自定义细条。 */
+::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb {
+::-webkit-scrollbar-thumb {
   background: rgba(113, 113, 122, 0.3);
   border-radius: 9999px;
 }
-:root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: rgba(113, 113, 122, 0.5);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb {
+  ::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.12);
   }
-  :root:not([data-platform="mac"]) ::-webkit-scrollbar-thumb:hover {
+  ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.2);
   }
 }
-:root:not([data-platform="mac"]) ::-webkit-scrollbar-track {
+::-webkit-scrollbar-track {
   background: transparent;
 }
