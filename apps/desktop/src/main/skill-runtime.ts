@@ -13,15 +13,19 @@
  *   之后零成本。沿用 cap-office/cap-document「按需、版本子目录、临时态不被误用」的取舍。
  * - 依赖集变化 → 目录名(内容哈希)变 → 自动走新目录重装,旧的不被误用。
  *
- * 取舍/后续:此版用运行时 `npm install` 就位(dev 直接可用;打包后若机器无 npm 会失败并优雅降级)。
- * 与 ocr-runtime 一致的进一步优化是改为从本 app 版本的 Release 下预构建 tar 包(含各平台原生 onnxruntime),
- * 那需 release workflow 产出对应附件;此处先留 npm 路径,接口不变。
+ * 就位方式两条路(与 ocr-runtime 同构):
+ * - **打包后**(传入 tarballUrl):从本 app 版本的 Release 下预构建 tar(含对应平台原生 onnxruntime)解压。
+ *   用户机器**无需 npm**。release workflow 按平台产出 skill-runtime-<plat>-<arch>.tar.gz。
+ * - **dev/未打包**(无 tarballUrl):本机 `npm install`(开发机有 npm)。
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, lstatSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { provisionOnce } from "@pa/infra";
+import { promisify } from "node:util";
+import { provisionOnce, atomicDownload } from "@pa/infra";
+
+const execFileAsync = promisify(execFile);
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -120,9 +124,11 @@ export interface EnsureResult {
 export async function ensureSkillRuntime(opts: {
   runtimeRoot: string;
   skillsDir: string;
+  /** 打包后:预构建 tar 的 Release URL(含对应平台原生 onnxruntime),下载解压、免 npm。dev 不传 → 本机 npm install。 */
+  tarballUrl?: string;
   onProgress?: (note: string) => void;
 }): Promise<EnsureResult> {
-  const { runtimeRoot, skillsDir, onProgress } = opts;
+  const { runtimeRoot, skillsDir, tarballUrl, onProgress } = opts;
   if (!anySkillNeedsRuntime(skillsDir)) return { ok: true, skipped: true };
 
   const dir = join(runtimeRoot, depsHash());
@@ -131,20 +137,29 @@ export async function ensureSkillRuntime(opts: {
 
   const r = await provisionOnce(dir, {
     isReady: () => existsSync(ready),
-    firstRunNote: "首次使用脚本 Skill:正在准备本地运行时(下载依赖,约几十 MB,仅此一次)…",
+    firstRunNote: "首次使用脚本 Skill:正在准备本地运行时(约几十 MB,仅此一次)…",
     onProgress,
     populate: async (note) => {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(
-        join(dir, "package.json"),
-        JSON.stringify(
-          { name: "akari-skill-runtime", private: true, type: "module", dependencies: SKILL_RUNTIME_DEPS },
-          null,
-          2
-        )
-      );
-      const inst = await npmInstall(dir);
-      if (!inst.ok) throw new Error(inst.error ?? "npm install 失败");
+      if (tarballUrl) {
+        // 打包后:下预构建 tar(顶层即 node_modules/),解压即用,用户机器无需 npm。
+        const tar = join(dir, "runtime.tar.gz");
+        await atomicDownload(tarballUrl, tar); // fetch → tmp → rename
+        await execFileAsync("tar", ["-xzf", tar, "-C", dir]);
+        rmSync(tar, { force: true });
+      } else {
+        // dev/未打包:本机 npm 装。
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify(
+            { name: "akari-skill-runtime", private: true, type: "module", dependencies: SKILL_RUNTIME_DEPS },
+            null,
+            2
+          )
+        );
+        const inst = await npmInstall(dir);
+        if (!inst.ok) throw new Error(inst.error ?? "npm install 失败");
+      }
       writeFileSync(ready, ""); // 装成功才打标记:半成品目录(无 .ready)下次会重装,不被误用
       note("本地运行时已就绪。");
     }
