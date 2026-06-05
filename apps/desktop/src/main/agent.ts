@@ -58,6 +58,7 @@ import { createScheduleTools, scheduleToolNames, scheduleGuidelines } from "./sc
 import { schedules } from "./scheduler";
 import { ensureSkillRuntime } from "./skill-runtime";
 import { seedBundledSkills } from "./seed-skills";
+import { ensureNodeShim } from "./node-shim";
 import {
   newConversationId,
   type Capability,
@@ -86,7 +87,8 @@ function resolveShellSpec(): ShellSpec | undefined {
   const argsRaw = (import.meta.env.MAIN_VITE_SHELL_ARGS as string | undefined) ?? "-c";
   return { bin, args: argsRaw.split(",").map((s) => s.trim()).filter(Boolean) };
 }
-const shellTools = createShellTools({ shell: resolveShellSpec() });
+// node shim 目录前置进 exec_shell 的 PATH:脚本 Skill 的 `node x.mjs` 用 app 自带 Node 跑(打包版用户无需装 node)。
+const shellTools = createShellTools({ shell: resolveShellSpec(), extraPath: [ensureNodeShim()] });
 
 /** API key 解析:用户设置里存的(safeStorage)优先 → 构建期 .env(dev 兜底)→ 环境变量。 */
 async function resolveApiKey(provider: string): Promise<string | undefined> {

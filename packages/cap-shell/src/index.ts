@@ -16,6 +16,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { homedir } from "node:os";
+import { delimiter } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
@@ -70,11 +71,15 @@ const IS_WINDOWS = process.platform === "win32";
  * posix 下用 `detached: true` 让子进程自成进程组(组长 pid = child.pid),
  * 这样 {@link killTree} 能用负 pid 一次性收掉 `sh -c "a | b"` 派生的所有孙进程。
  */
-function spawnShell(command: string, dir: string, shell?: ShellSpec): ChildProcess {
+function spawnShell(command: string, dir: string, shell?: ShellSpec, extraPath?: readonly string[]): ChildProcess {
+  // extraPath 前置进 PATH:让 app 注入的可执行(如 node shim → Electron 自带 Node)在命令里可寻址,
+  // 打包版用户即便没装 node 也能跑 `node x.mjs`(脚本 Skill 依赖)。
+  const basePath = process.env.PATH ?? "";
+  const PATH = extraPath && extraPath.length ? [...extraPath, basePath].join(delimiter) : basePath;
   const common = {
     cwd: dir,
     detached: !IS_WINDOWS, // 自成进程组,便于整组 kill;Windows 无对应语义,靠 killTree 的 taskkill /T 兜
-    env: { ...process.env, PATH: process.env.PATH }
+    env: { ...process.env, PATH }
   };
   return shell
     ? spawn(shell.bin, [...shell.args, command], common)
@@ -100,7 +105,7 @@ function killTree(child: ChildProcess, sig: NodeJS.Signals): void {
   }
 }
 
-function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParams> {
+function createExecShellTool(shell?: ShellSpec, extraPath?: readonly string[]): AgentTool<typeof execShellParams> {
   return {
   name: "exec_shell",
   label: "执行 Shell 命令",
@@ -113,7 +118,7 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
     const dir = cwd ?? homedir();
 
     return new Promise((resolve) => {
-      const child = spawnShell(command, dir, shell);
+      const child = spawnShell(command, dir, shell, extraPath);
 
       let stdout = "";
       let stderr = "";
@@ -204,9 +209,10 @@ function createExecShellTool(shell?: ShellSpec): AgentTool<typeof execShellParam
 /**
  * 创建 shell 工具集。不传 shell → 用系统默认 shell(当前行为,零回归);
  * 传 shell(如随包 busybox)→ 三平台命令一致。组合根决定传不传。
+ * extraPath:前置进子进程 PATH 的目录(如 app 的 node shim 目录),让 `node x.mjs` 在无系统 node 时也可寻址。
  */
-export function createShellTools(opts?: { shell?: ShellSpec }): AgentTool<any>[] {
-  return [createExecShellTool(opts?.shell)];
+export function createShellTools(opts?: { shell?: ShellSpec; extraPath?: readonly string[] }): AgentTool<any>[] {
+  return [createExecShellTool(opts?.shell, opts?.extraPath)];
 }
 
 export const shellToolNames: ReadonlySet<string> = new Set(["exec_shell"]);
