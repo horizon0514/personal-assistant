@@ -57,6 +57,8 @@ import { createSearchHistoryTool, searchHistoryToolName } from "./history-search
 import { createScheduleTools, scheduleToolNames, scheduleGuidelines } from "./schedule-tools";
 import { schedules } from "./scheduler";
 import { ensureSkillRuntime } from "./skill-runtime";
+import { seedBundledSkills } from "./seed-skills";
+import { ensureNodeShim } from "./node-shim";
 import {
   newConversationId,
   type Capability,
@@ -85,7 +87,8 @@ function resolveShellSpec(): ShellSpec | undefined {
   const argsRaw = (import.meta.env.MAIN_VITE_SHELL_ARGS as string | undefined) ?? "-c";
   return { bin, args: argsRaw.split(",").map((s) => s.trim()).filter(Boolean) };
 }
-const shellTools = createShellTools({ shell: resolveShellSpec() });
+// node shim 目录前置进 exec_shell 的 PATH:脚本 Skill 的 `node x.mjs` 用 app 自带 Node 跑(打包版用户无需装 node)。
+const shellTools = createShellTools({ shell: resolveShellSpec(), extraPath: [ensureNodeShim()] });
 
 /** API key 解析:用户设置里存的(safeStorage)优先 → 构建期 .env(dev 兜底)→ 环境变量。 */
 async function resolveApiKey(provider: string): Promise<string | undefined> {
@@ -284,6 +287,9 @@ let activeSessionId = "";
 // Skill 热插拔根目录(用户可往里丢文件夹,无需重启即生效)。每轮 send 经 contextProvider 重扫。
 const SKILLS_DIR = join(app.getPath("userData"), "skills");
 mkdirSync(SKILLS_DIR, { recursive: true });
+// 把随包内置 Skill(如 word-redact)播种进来——必须早于 ensureSkillRuntime / 首次 scanSkills,
+// 否则刚装的机器扫不到内置脚本 Skill,运行时也不会预热。用户自加/自改的不受影响。
+seedBundledSkills(SKILLS_DIR);
 
 // 「本 app 版本自己的 Release」附件下载基址。OCR 运行时 / 脚本 Skill 运行时都从这里按平台取,
 // 故 app 与各运行时版本天然一致。
