@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, lstatSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { provisionOnce } from "@pa/infra";
 
 const IS_WINDOWS = process.platform === "win32";
 
@@ -98,9 +99,6 @@ function npmInstall(cwd: string): Promise<{ ok: boolean; error?: string }> {
   });
 }
 
-/** 同一运行时目录的并发去重(多 adapter 同时触发只装一次)。 */
-const inflight = new Map<string, Promise<EnsureResult>>();
-
 export interface EnsureResult {
   readonly ok: boolean;
   /** 就绪时:运行时的 node_modules 绝对路径。 */
@@ -113,37 +111,29 @@ export interface EnsureResult {
 /**
  * 确保 Skill 共享运行时就位,并在 skills 根挂好 node_modules 符号链接。
  * 幂等 + 并发去重 + 优雅降级:没有脚本 Skill 直接跳过;npm 缺失/装失败只回报,不抛、不拖垮启动。
+ * 「按需 + 去重 + 防半成品 + 进度」的外层走公共 provisionOnce;本函数只管 populate(装依赖)与挂链接。
  *
  * @param runtimeRoot 运行时缓存根(如 <userData>/skill-runtime),内部按依赖哈希分子目录。
  * @param skillsDir   Skill 根目录(如 <userData>/skills)。
  * @param onProgress  进度回报(首次安装耗时,亮给用户)。
  */
-export function ensureSkillRuntime(opts: {
+export async function ensureSkillRuntime(opts: {
   runtimeRoot: string;
   skillsDir: string;
   onProgress?: (note: string) => void;
 }): Promise<EnsureResult> {
   const { runtimeRoot, skillsDir, onProgress } = opts;
-  if (!anySkillNeedsRuntime(skillsDir)) return Promise.resolve({ ok: true, skipped: true });
+  if (!anySkillNeedsRuntime(skillsDir)) return { ok: true, skipped: true };
 
   const dir = join(runtimeRoot, depsHash());
   const modulesDir = join(dir, "node_modules");
   const ready = join(dir, ".ready");
 
-  // 已就绪:只确保链接在位即可。
-  if (existsSync(ready)) {
-    try {
-      linkSkillsNodeModules(skillsDir, modulesDir);
-    } catch (e) {
-      return Promise.resolve({ ok: false, error: `链接 node_modules 失败: ${String(e)}` });
-    }
-    return Promise.resolve({ ok: true, modulesDir });
-  }
-
-  let p = inflight.get(dir);
-  if (!p) {
-    p = (async (): Promise<EnsureResult> => {
-      onProgress?.("首次使用脚本 Skill:正在准备本地运行时(下载依赖,约几十 MB,仅此一次)…");
+  const r = await provisionOnce(dir, {
+    isReady: () => existsSync(ready),
+    firstRunNote: "首次使用脚本 Skill:正在准备本地运行时(下载依赖,约几十 MB,仅此一次)…",
+    onProgress,
+    populate: async (note) => {
       mkdirSync(dir, { recursive: true });
       writeFileSync(
         join(dir, "package.json"),
@@ -153,18 +143,19 @@ export function ensureSkillRuntime(opts: {
           2
         )
       );
-      const r = await npmInstall(dir);
-      if (!r.ok) return { ok: false, error: r.error };
+      const inst = await npmInstall(dir);
+      if (!inst.ok) throw new Error(inst.error ?? "npm install 失败");
       writeFileSync(ready, ""); // 装成功才打标记:半成品目录(无 .ready)下次会重装,不被误用
-      try {
-        linkSkillsNodeModules(skillsDir, modulesDir);
-      } catch (e) {
-        return { ok: false, error: `链接 node_modules 失败: ${String(e)}` };
-      }
-      onProgress?.("本地运行时已就绪。");
-      return { ok: true, modulesDir };
-    })().finally(() => inflight.delete(dir));
-    inflight.set(dir, p);
+      note("本地运行时已就绪。");
+    }
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+
+  // 就绪(无论本次新装还是早已装好):确保 skills 根的 node_modules 符号链接在位。
+  try {
+    linkSkillsNodeModules(skillsDir, modulesDir);
+  } catch (e) {
+    return { ok: false, error: `链接 node_modules 失败: ${String(e)}` };
   }
-  return p;
+  return { ok: true, modulesDir };
 }
