@@ -199,6 +199,9 @@ importers:
       '@pa/domain-core':
         specifier: workspace:*
         version: link:../domain-core
+      '@pa/infra':
+        specifier: workspace:*
+        version: link:../infra
       onnxruntime-node:
         specifier: ^1.26.0
         version: 1.26.0
@@ -243,6 +246,9 @@ importers:
       '@pa/domain-core':
         specifier: workspace:*
         version: link:../domain-core
+      '@pa/infra':
+        specifier: workspace:*
+        version: link:../infra
     devDependencies:
       typescript:
         specifier: ^5.6.3

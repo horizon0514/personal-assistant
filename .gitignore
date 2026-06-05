@@ -10,3 +10,4 @@ release/
 !.env.example
 coverage/
 *.tsbuildinfo
+.models/

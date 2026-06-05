@@ -17,11 +17,12 @@
  * - 自管理超时 + 杀整个进程组防挂起(同 cap-shell:渲染/公式重算等可能卡)。
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import { provisionOnce, atomicDownload } from "@pa/infra";
 import type { Capability, RiskLevel } from "@pa/domain-core";
 
 const CAPABILITY: Capability = "office";
@@ -68,9 +69,6 @@ function isMuslLibc(): boolean {
   }
 }
 
-/** 并发去重(同一文件不重复下),写临时文件再 rename(防半成品被当成可用)。同 cap-document。 */
-const inflight = new Map<string, Promise<string | null>>();
-
 /**
  * 退出清理用的进程内状态:
  * - resolvedBin:已就位的二进制绝对路径(disposeOffice 用它去 close 常驻进程)。
@@ -82,38 +80,23 @@ const openedDocs = new Set<string>();
 /**
  * 确保 OfficeCLI 二进制就位,返回其绝对路径(下载失败 → null)。
  * 缓存到 <binRoot>/<version>/<asset>:带版本子目录,换版自动走新目录重下、旧的不被误用。
+ * 「按需 + 去重 + tmp/rename 防半成品 + 进度」的外层走公共 provisionOnce/atomicDownload。
  */
-function ensureOfficeBinary(binRoot: string, onNote: (note: string) => void): Promise<string | null> {
+async function ensureOfficeBinary(binRoot: string, onNote: (note: string) => void): Promise<string | null> {
   const asset = resolveAssetName();
-  const dir = join(binRoot, OFFICECLI_VERSION);
-  const dest = join(dir, asset);
-  if (existsSync(dest)) {
-    resolvedBin = dest;
-    return Promise.resolve(dest);
+  const dest = join(binRoot, OFFICECLI_VERSION, asset);
+  const r = await provisionOnce(dest, {
+    isReady: () => existsSync(dest),
+    firstRunNote: "首次使用 Office:正在下载 OfficeCLI 运行时(约 30–80MB,仅此一次)…",
+    onProgress: onNote,
+    populate: () => atomicDownload(`${RELEASE_BASE}/${asset}`, dest, { mode: 0o755 }) // 裸可执行文件:补可执行位
+  });
+  if (!r.ok) {
+    console.warn(`[cap-office] OfficeCLI 下载失败 ${asset}: ${r.error}`);
+    return null;
   }
-
-  let p = inflight.get(dest);
-  if (!p) {
-    onNote("首次使用 Office:正在下载 OfficeCLI 运行时(约 30–80MB,仅此一次)…");
-    p = (async (): Promise<string | null> => {
-      const res = await fetch(`${RELEASE_BASE}/${asset}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      mkdirSync(dir, { recursive: true });
-      const tmp = `${dest}.tmp`;
-      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
-      if (!IS_WINDOWS) chmodSync(tmp, 0o755); // 裸可执行文件:补可执行位
-      renameSync(tmp, dest);
-      resolvedBin = dest;
-      return dest;
-    })()
-      .catch((err: unknown) => {
-        console.warn(`[cap-office] OfficeCLI 下载失败 ${asset}: ${String(err)}`);
-        return null;
-      })
-      .finally(() => inflight.delete(dest));
-    inflight.set(dest, p);
-  }
-  return p;
+  resolvedBin = dest;
+  return dest;
 }
 
 // ── 风险分级 ────────────────────────────────────────────────────

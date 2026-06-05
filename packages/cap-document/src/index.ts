@@ -16,7 +16,7 @@
  * docx/xlsx 需另装 LibreOffice,不在开箱即用范围,暂不支持。
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { extname, join } from "node:path";
@@ -25,6 +25,7 @@ import { pathToFileURL } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Capability, RiskLevel } from "@pa/domain-core";
+import { provisionOnce, atomicDownload } from "@pa/infra";
 import { LiteParse, type ParseResult } from "@llamaindex/liteparse";
 // PaddleOCR 栈(onnxruntime ~65MB + @napi-rs/canvas + opencv-js ≈ 90–100MB)不随 app 包:
 // 打包时从 electron-builder 排除,首个扫描件触发时按平台下载到 <userData>/ocr-runtime/<ver> 再加载。
@@ -132,30 +133,15 @@ const getDigitalParser = lazy(() => new LiteParse({ outputFormat: "text", ocrEna
 const getRenderParser = lazy(() => new LiteParse({ dpi: OCR_RENDER_DPI }));
 
 // ── PaddleOCR 模型按需下载 + 服务单例 ─────────────────────────────
-// 并发去重(同一文件不重复下),写临时文件再 rename(防半成品被当成可用)。
-const inflight = new Map<string, Promise<boolean>>();
-function ensureFile(dir: string, file: string, url: string): Promise<boolean> {
+// 「按需 + 去重 + tmp/rename 防半成品」外层走公共 provisionOnce/atomicDownload;失败不抛,回 false。
+async function ensureFile(dir: string, file: string, url: string): Promise<boolean> {
   const dest = join(dir, file);
-  if (existsSync(dest)) return Promise.resolve(true);
-  let p = inflight.get(dest);
-  if (!p) {
-    p = (async (): Promise<boolean> => {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      mkdirSync(dir, { recursive: true });
-      const tmp = `${dest}.tmp`;
-      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
-      renameSync(tmp, dest);
-      return true;
-    })()
-      .catch((err: unknown) => {
-        console.warn(`[cap-document] OCR 模型下载失败 ${file}: ${String(err)}`);
-        return false;
-      })
-      .finally(() => inflight.delete(dest));
-    inflight.set(dest, p);
-  }
-  return p;
+  const r = await provisionOnce(dest, {
+    isReady: () => existsSync(dest),
+    populate: () => atomicDownload(url, dest)
+  });
+  if (!r.ok) console.warn(`[cap-document] OCR 模型下载失败 ${file}: ${r.error}`);
+  return r.ok;
 }
 async function ensurePaddleModels(dir: string): Promise<boolean> {
   const oks = await Promise.all(PADDLE_MODELS.map((m) => ensureFile(dir, m.file, m.url)));
@@ -165,28 +151,22 @@ async function ensurePaddleModels(dir: string): Promise<boolean> {
 // ── OCR 原生运行时外置:按需下载 + 解压,再从该目录动态加载 PaddleOCR 栈 ──────────
 const execFileAsync = promisify(execFile);
 
-// 运行时下载并发去重 + 就绪标记(.ready):标记在则视为已解压可用,跳过重复下载。
-let runtimeInflight: Promise<void> | null = null;
-function ensureOcrRuntime(rt: OcrRuntime): Promise<void> {
+// 运行时按需下载 + 解压,就绪标记(.ready)在则跳过。外层走 provisionOnce(去重/防半成品);
+// 调用方(loadPaddleCtor)靠「抛错」来重置自己的单例缓存,故失败时把 provisionOnce 的 error 抛出。
+async function ensureOcrRuntime(rt: OcrRuntime): Promise<void> {
   const ready = join(rt.dir, ".ready");
-  if (existsSync(ready)) return Promise.resolve();
-  if (!runtimeInflight) {
-    runtimeInflight = (async () => {
-      mkdirSync(rt.dir, { recursive: true });
-      const tmp = join(rt.dir, "runtime.tar.gz.tmp");
-      const res = await fetch(rt.url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+  const r = await provisionOnce(rt.dir, {
+    isReady: () => existsSync(ready),
+    populate: async () => {
+      const tar = join(rt.dir, "runtime.tar.gz");
+      await atomicDownload(rt.url, tar); // fetch → tmp → rename;mkdir 由 atomicDownload 负责
       // 系统 tar 解压(mac/linux 自带;Windows 10 1803+ 自带 bsdtar)。包内顶层即 node_modules/。
-      await execFileAsync("tar", ["-xzf", tmp, "-C", rt.dir]);
-      rmSync(tmp, { force: true });
+      await execFileAsync("tar", ["-xzf", tar, "-C", rt.dir]);
+      rmSync(tar, { force: true });
       writeFileSync(ready, new Date().toISOString());
-    })().catch((err: unknown) => {
-      runtimeInflight = null;
-      throw err;
-    });
-  }
-  return runtimeInflight;
+    }
+  });
+  if (!r.ok) throw new Error(r.error ?? "OCR 运行时准备失败");
 }
 
 // PaddleOCR 构造器懒加载:打包后从外置运行时目录解析(createRequire 锚在该 node_modules,

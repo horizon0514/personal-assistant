@@ -76,3 +76,4 @@ export { readJson, writeJson } from "./persistence";
 export { WorkspaceStore, type WorkspaceRecord } from "./workspace-store";
 export { SessionStore, type SessionRecord } from "./session-store";
 export { ScheduleStore, type ScheduleRecord, type ScheduleDraft } from "./schedule-store";
+export { provisionOnce, atomicDownload, type ProvisionResult, type ProgressFn } from "./provision";

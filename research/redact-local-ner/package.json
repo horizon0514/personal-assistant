@@ -1,0 +1,12 @@
+{
+  "name": "redact-local-ner-poc",
+  "private": true,
+  "type": "module",
+  "description": "POC: 纯本地中文敏感实体检测(脱敏用),transformers.js + ONNX",
+  "scripts": {
+    "start": "node detect.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0"
+  }
+}
