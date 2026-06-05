@@ -1,6 +1,6 @@
 {
   "name": "personal-assistant",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "description": "面向知识工作者的去终端化本地电脑助理",
   "type": "module",
