@@ -24,13 +24,12 @@
 
 ## 已做(2026-06):公共运行时供给
 
-office / document / skill-runtime 三处在重复同一套「按需下载 + tmp/rename 防半成品 + 并发去重 + 版本子目录 + onProgress + 不抛降级」。已抽成 `@pa/infra` 的 `provisionOnce` + `atomicDownload`,并改造了 **skill-runtime** 与 **cap-office** 两处接入。
+office / document / skill-runtime 三处在重复同一套「按需下载 + tmp/rename 防半成品 + 并发去重 + 版本子目录 + onProgress + 不抛降级」。已抽成 `@pa/infra` 的 `provisionOnce` + `atomicDownload`,**三处全部接入**:
+- **cap-office** `ensureOfficeBinary`:`provisionOnce` + `atomicDownload`(下二进制,带 mode=0o755)。
+- **skill-runtime** `ensureSkillRuntime`:`provisionOnce` 包 npm install populate。
+- **cap-document** `ensureFile`(模型文件,返 boolean+warn)与 `ensureOcrRuntime`(下 tar→系统 tar 解压→打 .ready,失败抛错以配合 loadPaddleCtor 重置单例):均改用 `provisionOnce`,下载段复用 `atomicDownload`。
 
-### 待办 A:cap-document 接入 provisionOnce(第三个采用方)
-cap-document 有 3 处供给(OCR 运行时 tar 包、PaddleOCR 模型文件循环、就绪标记),形状与 provisionOnce 完全吻合,但它是产品核心、含 napi/onnxruntime,**本地无依赖跑不了它的测试**,故未在本轮改,留作带测试的谨慎迁移。
-- 运行时 tar 包:`provisionOnce(rt.dir, { isReady: ()=>existsSync(.ready), populate: 下 tar→解压→打 .ready })`。
-- 模型文件:每个 `provisionOnce(dest, { isReady, populate: atomicDownload(url,dest) })`。
-- 需要时给 infra 再加一个 `atomicDownloadAndExtractTar(url, dir)` 辅助(目前 document 用系统 tar)。
+> cap-document 含 napi/onnxruntime,**本地无依赖跑不了它的集成测试**;本轮改动为严格行为保持的机械重构(签名/返回/抛错语义不变),需在有依赖的环境 `pnpm -r typecheck` + 跑一次真实 OCR 验证。
 
 ## 待办 B:把 cap-office 迁成 Skill(验证范式上限)
 
