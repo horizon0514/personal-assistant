@@ -15,6 +15,9 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 export type MemoryKind = "preference" | "fact";
 export type MemoryStatus = "active" | "forgotten";
 
+/** render() 里 fact 类记忆的全量注入上限,超过则按相关性截断(见 render 注释)。 */
+const FACTS_INJECT_LIMIT = 12;
+
 /** 情景层:这条记忆"如何习得"的现场。 */
 export interface Episode {
   /** agent 写的"当时在做什么"。 */
@@ -85,6 +88,38 @@ function normalize(raw: Partial<MemoryItem> & { enabled?: boolean }): MemoryItem
     createdAt,
     updatedAt: raw.updatedAt ?? createdAt
   };
+}
+
+/** 拼出一条记忆参与检索/打分的全文(content + situation + quote)。 */
+function haystackOf(i: MemoryItem): string {
+  return [i.content, i.episode.situation ?? "", i.episode.quote ?? ""].join(" ");
+}
+
+/** 去空白后按 2 字符滑窗切 shingle;中日韩无词边界,英文近似按词根重叠,零依赖够用。 */
+function shingles(s: string): Set<string> {
+  const t = s.toLowerCase().replace(/\s+/g, "");
+  if (t.length < 2) return t ? new Set([t]) : new Set();
+  const out = new Set<string>();
+  for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+
+/**
+ * 相关性打分,零依赖(不接 embedding,不发网络请求):
+ * 整段 query 作为子串命中 → 固定高分,保底原有"精确子串"语义不变;
+ * 否则按 shingle 重叠率给 0..1 的模糊分,让措辞不完全一致时也能部分命中,
+ * 而不是像原来的 `includes` 那样非全字符串命中即 0。
+ */
+function relevance(query: string, hay: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  if (hay.toLowerCase().includes(q)) return 1000 + q.length; // 精确子串:始终排最前
+  const qs = shingles(q);
+  if (qs.size === 0) return 0;
+  const hs = shingles(hay);
+  let overlap = 0;
+  for (const g of qs) if (hs.has(g)) overlap++;
+  return overlap / qs.size;
 }
 
 function toView(i: MemoryItem): MemoryView {
@@ -190,30 +225,49 @@ export class MemoryStore {
     return this.items.filter((i) => i.status === "forgotten").map(toView);
   }
 
-  /** 关键词检索(content / situation / quote),返回完整项供 agent 看来龙去脉。 */
+  /** 检索(content / situation / quote):精确子串优先,查不到再按模糊相关性排序返回。 */
   search(query: string): MemoryItem[] {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if (!q) return [];
-    return this.items.filter((i) => {
-      if (i.status !== "active") return false;
-      const hay = [i.content, i.episode.situation ?? "", i.episode.quote ?? ""].join(" ").toLowerCase();
-      return hay.includes(q);
-    });
+    return this.items
+      .filter((i) => i.status === "active")
+      .map((i) => ({ item: i, score: relevance(q, haystackOf(i)) }))
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((r) => r.item);
   }
 
   /**
    * 渲染为上下文注入块(精简语义层,每条带 [id] 供 update/forget 引用);
    * 情景/历史不注入,需 search_memory 拉取。无活跃记忆则返回 undefined。
+   *
+   * fact 条数一多,全量注入会稀释上下文、拖累相关性,故超过 FACTS_INJECT_LIMIT 时
+   * 按本轮用户原话(query)与每条记忆的相关性排序,只注入最相关的一批;没有 query
+   * (如未接线的调用方)则退化为按最近更新排序。preference 条数通常少、是人设级信息,始终全量注入。
    */
-  render(): string | undefined {
+  render(query?: string): string | undefined {
     const active = this.items.filter((i) => i.status === "active");
     if (active.length === 0) return undefined;
     const line = (i: MemoryItem): string => `- [${i.id}] ${i.content}`;
     const prefs = active.filter((i) => i.kind === "preference");
-    const facts = active.filter((i) => i.kind === "fact");
+    const allFacts = active.filter((i) => i.kind === "fact");
+    let facts = allFacts;
+    let truncated = false;
+    if (allFacts.length > FACTS_INJECT_LIMIT) {
+      truncated = true;
+      facts = query?.trim()
+        ? [...allFacts].sort((a, b) => relevance(query, haystackOf(b)) - relevance(query, haystackOf(a)))
+        : [...allFacts].sort((a, b) => b.updatedAt - a.updatedAt);
+      facts = facts.slice(0, FACTS_INJECT_LIMIT);
+    }
     let s = "# 关于这位用户(你之前记住的,据此个性化你的行为;改/忘某条用其 [id])\n";
     if (prefs.length) s += `偏好:\n${prefs.map(line).join("\n")}\n`;
-    if (facts.length) s += `事实:\n${facts.map(line).join("\n")}`;
+    if (facts.length) {
+      const note = truncated
+        ? `(共 ${allFacts.length} 条,仅显示与当前最相关的 ${FACTS_INJECT_LIMIT} 条;需要更多用 search_memory 查)`
+        : "";
+      s += `事实${note}:\n${facts.map(line).join("\n")}`;
+    }
     return s.trim();
   }
 }
@@ -257,7 +311,7 @@ const forgetParams = Type.Object({
 });
 
 const searchParams = Type.Object({
-  query: Type.String({ description: "关键词;匹配记忆内容/情景/原话" })
+  query: Type.String({ description: "关键词或短句;模糊匹配记忆内容/情景/原话,按相关性排序返回" })
 });
 
 function renderHit(i: MemoryItem): string {

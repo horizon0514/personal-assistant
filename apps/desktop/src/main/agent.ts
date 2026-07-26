@@ -246,6 +246,9 @@ const turnGuidelineBySession = new Map<string, string>();
 // 每会话「本轮用户拖入附件的本地路径」(send 里拷贝后写入,contextProvider 按轮注入给 agent;
 // 用户消息气泡只显示文件名,完整路径走这里,避免长路径污染对话)。
 const turnAttachmentsBySession = new Map<string, string[]>();
+// 每会话「本轮用户原话」(send/runScheduledTask 写入,contextProvider 读取传给 memory.render()
+// 做相关性排序——fact 记忆多了不再全量注入,按这条 query 挑最相关的一批,见 ctx-memory)。
+const turnQueryBySession = new Map<string, string>();
 
 /** 把本轮附件的绝对路径渲染成给 agent 的上下文块(无附件 → undefined,不注入)。 */
 function renderTurnAttachments(paths: string[] | undefined): string | undefined {
@@ -668,7 +671,7 @@ function buildAdapter(
         // 本轮用户拖入的附件(已拷到本地)的绝对路径——用户消息只显示文件名,完整路径在此给 agent。
         renderTurnAttachments(turnAttachmentsBySession.get(sessionId)),
         renderBoundNotebook(getSessions(wsId).get(sessionId)?.boundNotebook, wsId),
-        memory.render(),
+        memory.render(turnQueryBySession.get(sessionId)),
         renderRecentThreads(getSessions(wsId), sessionId),
         renderSkillsForContext(scanSkills(SKILLS_DIR), SKILLS_DIR)
       ]
@@ -792,6 +795,7 @@ export const agent = {
     recentBySession.clear();
     turnGuidelineBySession.clear();
     turnAttachmentsBySession.clear();
+    turnQueryBySession.clear();
     const list = workspaces.list();
     if (!list.some((w) => w.id === activeWorkspaceId)) {
       activeWorkspaceId = list[0]?.id ?? activeWorkspaceId;
@@ -870,6 +874,7 @@ export const agent = {
     }
     turnAttachmentsBySession.set(sessionId, savedPaths); // 空数组 → contextProvider 不注入
     const userText = names.length > 0 ? `${text}${text ? "\n\n" : ""}📎 附件:${names.join("、")}` : text;
+    turnQueryBySession.set(sessionId, userText); // 供 memory.render() 做相关性排序
 
     let instance: PiAgentAdapter;
     try {
@@ -939,6 +944,7 @@ export const agent = {
     const sessionId = rec.id;
     broadcast("session:changed", sessions.list());
     const instance = buildAdapter(wsId, sessionId, undefined, { background: true });
+    turnQueryBySession.set(sessionId, prompt); // 供 memory.render() 做相关性排序
     try {
       const selector = selectorsBySession.get(sessionId);
       if (selector) {
@@ -966,6 +972,7 @@ export const agent = {
       recentBySession.delete(sessionId);
       turnGuidelineBySession.delete(sessionId);
       turnAttachmentsBySession.delete(sessionId);
+      turnQueryBySession.delete(sessionId);
     }
   },
 

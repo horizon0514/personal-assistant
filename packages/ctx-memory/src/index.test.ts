@@ -94,4 +94,50 @@ describe("MemoryStore 拟人能力", () => {
     expect(text).toContain(`[${pref.id}]`); // 带 id 供 agent 引用
     expect(text).not.toContain("不该出现");
   });
+
+  it("search 措辞不完全一致也能模糊命中,按相关性排序", () => {
+    const s = new MemoryStore(file);
+    const close = s.add({ kind: "fact", content: "不喜欢在回复里用 emoji" });
+    s.add({ kind: "fact", content: "归档目录是 ~/归档" });
+    // 查询词与记忆原文没有完整子串命中,但 shingle 有重叠,应仍能查到且排在不相关的前面。
+    const hits = s.search("回复用emoji的风格偏好");
+    expect(hits[0]!.id).toBe(close.id);
+  });
+
+  it("search 查无相关内容返回空", () => {
+    const s = new MemoryStore(file);
+    s.add({ kind: "fact", content: "归档目录是 ~/归档" });
+    expect(s.search("完全不搭界的查询串")).toHaveLength(0);
+  });
+
+  it("render(query) 在 fact 超限时按相关性截断,preference 始终全量", () => {
+    const s = new MemoryStore(file);
+    s.add({ kind: "preference", content: "偏好A" });
+    s.add({ kind: "preference", content: "偏好B" });
+    const target = s.add({ kind: "fact", content: "用户在做跨对话记忆功能的相关性排序" });
+    for (let i = 0; i < 15; i++) s.add({ kind: "fact", content: `无关事实第${i}条` });
+
+    const text = s.render("记忆功能相关性排序怎么做")!;
+    expect(text).toContain("偏好A");
+    expect(text).toContain("偏好B"); // preference 不受截断影响
+    expect(text).toContain(`[${target.id}]`); // 最相关的那条被保留
+    expect(text).toContain("共 16 条"); // 截断提示报出真实总数
+    // 截断后不应把全部 16 条 fact 都塞进去
+    const factLines = text.split("\n").filter((l) => l.startsWith("- ["));
+    expect(factLines.length).toBeLessThan(16 + 2);
+  });
+
+  it("render() 不传 query 时,fact 超限退化为按最近更新截断,不报错", () => {
+    const s = new MemoryStore(file);
+    for (let i = 0; i < 15; i++) s.add({ kind: "fact", content: `事实${i}` });
+    const text = s.render()!;
+    expect(text).toContain("仅显示与当前最相关的");
+  });
+
+  it("render() 未超限时不截断、不加提示", () => {
+    const s = new MemoryStore(file);
+    s.add({ kind: "fact", content: "唯一事实" });
+    const text = s.render()!;
+    expect(text).not.toContain("仅显示");
+  });
 });
