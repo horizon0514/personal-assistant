@@ -32,6 +32,7 @@ type sessionMeta struct {
 	File         string `json:"file"` // absolute path to transcript .jsonl
 	WorkspaceDir string `json:"workspaceDir,omitempty"`
 	UpdatedAt    int64  `json:"updatedAt"`
+	Primary      bool   `json:"primary,omitempty"`
 }
 
 type sessionIndex struct {
@@ -296,6 +297,7 @@ type appState struct {
 
 	draft string
 	busy  bool
+	assignOpen bool
 
 	// ask_user modal
 	askOpen     bool
@@ -309,6 +311,10 @@ type appState struct {
 	// sessions
 	sessions []sessionMeta
 	selected string // session id
+
+	// background dispatch
+	activeRunSession string
+	bgStreaming      map[string]*bytes.Buffer // sessionID -> buffer
 }
 
 func (s *appState) view(c *ui.Context) {
@@ -336,7 +342,11 @@ func (s *appState) view(c *ui.Context) {
 					row.Background(ui.RGBA(60, 60, 64, 1))
 				}
 				row.Children(func() {
-					ui.Text(c, sm.Title).SingleLine()
+					title := sm.Title
+					if sm.Primary {
+						title = "★ " + title
+					}
+					ui.Text(c, title).SingleLine()
 					if sm.WorkspaceDir != "" {
 						ui.Text(c, sm.WorkspaceDir).TextColor(t.TextMuted).FontSize(11).SingleLine()
 					}
@@ -390,7 +400,13 @@ func (s *appState) view(c *ui.Context) {
 					}
 					return false
 				})
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			// Assign control (primary session only)
+			if sm := s.currentSession(); sm != nil && sm.Primary {
+				if ui.Button(c, "Assign…").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+					s.assignOpen = !s.assignOpen
+				}
+			}
 					if ui.Button(c, "Stop").Disabled(!s.busy).Clicked() {
 						if s.br != nil {
 							_ = s.br.stop()
@@ -400,6 +416,44 @@ func (s *appState) view(c *ui.Context) {
 						s.send()
 					}
 				})
+		// Assign overlay
+		if s.assignOpen {
+			ui.Column(c).Padding(10).Radius(10).Background(ui.RGBA(36, 36, 40, 1)).Gap(6).Children(func() {
+				ui.Text(c, "Assign to session").Bold()
+				for _, sm := range s.sessions {
+					if sm.ID == s.selected {
+						continue
+					}
+					lbl := sm.Title
+					if sm.WorkspaceDir != "" {
+						lbl = fmt.Sprintf("%s  ·  %s", lbl, sm.WorkspaceDir)
+					}
+					if ui.Button(c, lbl).Clicked() {
+						s.dispatchTo(sm.ID, strings.TrimSpace(s.draft))
+						s.draft = ""
+						s.assignOpen = false
+					}
+				}
+				if ui.Button(c, "New worker…").Clicked() {
+					// optional workspace
+					var ws string
+					paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+						Parent:    s.win,
+						Title:     "Choose workspace folder (optional)",
+						Directory: true,
+					})
+					if err == nil && len(paths) > 0 {
+						ws = paths[0]
+					}
+					newID := s.newWorkerWithOptionalFolder(ws)
+					if newID != "" {
+						s.dispatchTo(newID, strings.TrimSpace(s.draft))
+						s.draft = ""
+						s.assignOpen = false
+					}
+				}
+			})
+		}
 			})
 		})
 	})
@@ -478,7 +532,8 @@ func (s *appState) answerAsk(ans string) {
 
 func main() {
 	state := &appState{
-		status: "Starting chatgo…",
+		status:      "Starting chatgo…",
+		bgStreaming: make(map[string]*bytes.Buffer),
 	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
@@ -522,21 +577,64 @@ func main() {
 							state.currentRun = ev.ID
 							state.streaming.Reset()
 						}
-						state.streaming.WriteString(ev.Text)
+						// route streaming by run context
+						if state.activeRunSession != "" && state.activeRunSession != state.selected {
+							buf := state.bgStreaming[state.activeRunSession]
+							if buf == nil {
+								b := &bytes.Buffer{}
+								state.bgStreaming[state.activeRunSession] = b
+								buf = b
+							}
+							buf.WriteString(ev.Text)
+						} else {
+							state.streaming.WriteString(ev.Text)
+						}
 					})
 				case "assistant_done":
 					win.Update(func() {
-						if state.streaming.Len() > 0 {
-							state.msgs = append(state.msgs, chatMsg{you: false, text: state.streaming.String()})
-							// persist assistant message
+						// background worker run?
+						if state.activeRunSession != "" && state.activeRunSession != state.selected {
+							buf := state.bgStreaming[state.activeRunSession]
+							out := ""
+							if buf != nil {
+								out = buf.String()
+								buf.Reset()
+							}
+							// append to worker transcript
+							for i := range state.sessions {
+								if state.sessions[i].ID == state.activeRunSession {
+									_ = appendTranscriptLine(&state.sessions[i], transcriptLine{Type: "assistant", Text: out, Timestamp: time.Now().Unix()})
+									break
+								}
+							}
+							_ = state.saveIndex()
+							// summary back to primary
+							summary := summarize(out)
+							state.msgs = append(state.msgs, chatMsg{you: false, text: fmt.Sprintf("Worker result: %s", summary)})
 							if sm := state.currentSession(); sm != nil {
-								_ = appendTranscriptLine(sm, transcriptLine{Type: "assistant", Text: state.streaming.String(), Timestamp: time.Now().Unix()})
+								_ = appendTranscriptLine(sm, transcriptLine{Type: "assistant", Text: fmt.Sprintf("Worker result: %s", summary), Timestamp: time.Now().Unix()})
 								_ = state.saveIndex()
 							}
+							// re-init back to primary cwd
+							if state.br != nil {
+								_ = state.br.init("deepseek", "deepseek-v4-flash", state.currentWorkspace())
+							}
+							state.activeRunSession = ""
+							state.currentRun = ""
+							state.busy = false
+						} else {
+							if state.streaming.Len() > 0 {
+								state.msgs = append(state.msgs, chatMsg{you: false, text: state.streaming.String()})
+								// persist assistant message
+								if sm := state.currentSession(); sm != nil {
+									_ = appendTranscriptLine(sm, transcriptLine{Type: "assistant", Text: state.streaming.String(), Timestamp: time.Now().Unix()})
+									_ = state.saveIndex()
+								}
+							}
+							state.streaming.Reset()
+							state.currentRun = ""
+							state.busy = false
 						}
-						state.streaming.Reset()
-						state.currentRun = ""
-						state.busy = false
 					})
 				case "error":
 					win.Update(func() {
@@ -571,6 +669,20 @@ func (s *appState) loadOrInitSessions() error {
 		return err
 	}
 	s.sessions = idx.Sessions
+	// ensure one primary (first marked if none)
+	hasPrimary := false
+	for _, sm := range s.sessions {
+		if sm.Primary {
+			hasPrimary = true
+			break
+		}
+	}
+	if !hasPrimary {
+		if len(s.sessions) > 0 {
+			s.sessions[0].Primary = true
+			_ = s.saveIndex()
+		}
+	}
 	// sort by UpdatedAt desc (simple stable selection by scanning)
 	if len(s.sessions) == 0 {
 		sm, err := newSessionMeta("New chat")
@@ -582,6 +694,7 @@ func (s *appState) loadOrInitSessions() error {
 		// remove the welcome from messages load later, keep file created
 		// rewrite file empty
 		_ = os.WriteFile(sm.File, []byte{}, 0o644)
+		sm.Primary = true
 		s.sessions = []sessionMeta{sm}
 		s.selected = sm.ID
 		_ = s.saveIndex()
@@ -658,6 +771,19 @@ func (s *appState) newChat() {
 	}
 }
 
+func (s *appState) newWorkerWithOptionalFolder(ws string) string {
+	sm, err := newSessionMeta("New chat")
+	if err != nil {
+		s.status = "Failed to create session: " + err.Error()
+		return ""
+	}
+	sm.WorkspaceDir = ws
+	// never mark worker as primary
+	s.sessions = append([]sessionMeta{sm}, s.sessions...)
+	_ = s.saveIndex()
+	return sm.ID
+}
+
 func (s *appState) bindWorkspace() {
 	if s.win == nil {
 		return
@@ -688,4 +814,46 @@ func truncateTitle(s string) string {
 		return string(r[:24])
 	}
 	return t
+}
+
+func summarize(s string) string {
+	txt := strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len([]rune(txt)) > 200 {
+		r := []rune(txt)
+		return string(r[:200]) + "…"
+	}
+	return txt
+}
+
+func (s *appState) dispatchTo(sessionID string, prompt string) {
+	if s.br == nil || prompt == "" {
+		return
+	}
+	// find or create target
+	var target *sessionMeta
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			target = &s.sessions[i]
+			break
+		}
+	}
+	if target == nil {
+		return
+	}
+	// persist user prompt in worker transcript
+	_ = appendTranscriptLine(target, transcriptLine{Type: "user", Text: prompt, Timestamp: time.Now().Unix()})
+	_ = s.saveIndex()
+	// switch bridge to worker cwd and run in background
+	s.busy = true
+	s.activeRunSession = target.ID
+	id := fmt.Sprintf("w-%d", time.Now().UnixNano())
+	if s.br != nil {
+		_ = s.br.init("deepseek", "deepseek-v4-flash", target.WorkspaceDir)
+	}
+	if err := s.br.send(id, prompt); err != nil {
+		// report error into primary
+		s.msgs = append(s.msgs, chatMsg{you: false, text: "⚠ dispatch failed: " + err.Error()})
+		s.busy = false
+		s.activeRunSession = ""
+	}
 }

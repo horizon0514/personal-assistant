@@ -43,3 +43,10 @@ go build -o chatgo
 
 - If no API key is found, the app will warn and the agent will likely error out gracefully.
 - Tools are intentionally minimal for MVP; only `ask_user` is wired as a stub to demonstrate the approval/interaction hook.
+
+## Primary vs worker sessions (orchestration)
+
+- One session is marked as primary (first by default). The user chats here day-to-day.
+- Other sessions are workers, each can bind a workspace folder (path shown in the sidebar).
+- From the primary composer, use “Assign…” to dispatch the current prompt to a worker (existing or New worker…). The worker runs in its own cwd via the stdio bridge, and when done a short result appears in the primary as a normal assistant bubble. The worker’s own transcript is stored locally as JSONL.
+- Local-only, no account or cloud store. Dispatch is sequential in v1 (simple and reliable); parallelism can be added later.
