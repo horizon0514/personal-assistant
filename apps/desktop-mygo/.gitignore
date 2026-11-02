@@ -1,0 +1,6 @@
+# Local builds and MyGo dev output
+desktop-mygo
+.mygo/
+build/
+dist/
+
