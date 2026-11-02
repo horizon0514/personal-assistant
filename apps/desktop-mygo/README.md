@@ -1,4 +1,4 @@
-# Akari Desktop (MyGo)
+# chatgo (MyGo)
 
 A minimal MyGo native UI desktop chat app that hosts the UI and talks to the `pi` runtime via a local NDJSON stdio bridge.
 
@@ -35,8 +35,8 @@ go run .
 
 ```bash
 cd apps/desktop-mygo
-go build -o akari-mygo
-./akari-mygo
+go build -o chatgo
+./chatgo
 ```
 
 ## Notes

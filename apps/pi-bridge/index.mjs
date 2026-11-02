@@ -100,7 +100,7 @@ function buildAgent() {
   const a = new Agent({
     initialState: {
       systemPrompt:
-        "You are Akari, a helpful personal assistant. Keep responses concise and actionable unless asked for detail.",
+        "You are chatgo, a helpful personal assistant. Keep responses concise and actionable unless asked for detail.",
       model,
       thinkingLevel: "high",
       tools: [askUserTool]

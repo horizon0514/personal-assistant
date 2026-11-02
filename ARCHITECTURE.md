@@ -1,4 +1,4 @@
-Akari — Clean Architecture (MVP)
+chatgo — Clean Architecture (MVP)
 
 Overview
 

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "NDJSON stdio bridge exposing a minimal pi chat runtime for Akari MyGo UI",
+  "description": "NDJSON stdio bridge exposing a minimal pi chat runtime for the chatgo UI",
   "main": "index.mjs",
   "scripts": {
     "start": "node ./index.mjs"

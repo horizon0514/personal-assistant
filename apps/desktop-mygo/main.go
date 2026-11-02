@@ -166,7 +166,7 @@ func (s *appState) view(c *ui.Context) {
 	ui.Column(c).Fill().Padding(12).Gap(8).Children(func() {
 		// Title + status
 		ui.Row(c).Justify(ui.SpaceBetween).Children(func() {
-			ui.Text(c, "Akari — MyGo").FontSize(18).Bold()
+			ui.Text(c, "chatgo").FontSize(18).Bold()
 			ui.Text(c, s.status).TextColor(t.TextMuted)
 		})
 		// Chat area
@@ -180,7 +180,7 @@ func (s *appState) view(c *ui.Context) {
 					})
 				} else {
 					ui.RichText(c,
-						ui.Span{Text: "Akari:", Weight: 600, Color: t.Accent},
+						ui.Span{Text: "chatgo:", Weight: 600, Color: t.Accent},
 					).Children(func() {
 						ui.Text(c, " "+m.text)
 					})
@@ -189,7 +189,7 @@ func (s *appState) view(c *ui.Context) {
 			// streaming line
 			if s.streaming.Len() > 0 {
 				ui.RichText(c,
-					ui.Span{Text: "Akari:", Weight: 600, Color: t.Accent},
+					ui.Span{Text: "chatgo:", Weight: 600, Color: t.Accent},
 				).Children(func() {
 					ui.Text(c, " "+s.streaming.String())
 				})
@@ -289,7 +289,7 @@ func main() {
 	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:  "Akari — MyGo",
+			Title:  "chatgo",
 			Width:  900,
 			Height: 640,
 			Content: ui.View(func(c *ui.Context) {
