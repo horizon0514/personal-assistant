@@ -14,12 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 )
 
 type ndjsonEvent struct {
@@ -45,10 +41,10 @@ type ndjsonMsg struct {
 }
 
 type bridge struct {
-	cmd    *exec.Cmd
-	stdin  *bufio.Writer
-	stdout *bufio.Scanner
-	mu     sync.Mutex
+	cmd     *exec.Cmd
+	stdin   *bufio.Writer
+	stdout  *bufio.Scanner
+	mu      sync.Mutex
 	running bool
 }
 
@@ -116,7 +112,6 @@ func (b *bridge) askAnswer(reqID, answer string) error {
 
 func (b *bridge) close() {
 	_ = b.stop()
-	// Best-effort wait; process exits when stdin closes.
 	_ = b.cmd.Process.Kill()
 }
 
@@ -139,41 +134,178 @@ func findWorkspaceRoot() (string, error) {
 	return "", fmt.Errorf("could not find pnpm-workspace.yaml up the tree")
 }
 
-func main() {
-	akari := app.NewWithID("akari.desktop.mygo")
-	akari.Settings().SetTheme(theme.DarkTheme())
-	w := akari.NewWindow("Akari — MyGo")
-	w.Resize(fyne.NewSize(900, 640))
+type chatMsg struct {
+	you  bool
+	text string
+}
 
-	chatView := widget.NewMultiLineEntry()
-	chatView.SetPlaceHolder("Akari chat will appear here…")
-	chatView.Disable()
+type appState struct {
+	win *mygo.Window
 
-	input := widget.NewMultiLineEntry()
-	input.SetPlaceHolder("Type a message…")
-	sendBtn := widget.NewButton("Send", nil)
-	stopBtn := widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), nil)
-	stopBtn.Disable()
+	status string
 
-	status := widget.NewLabel("Starting pi bridge…")
+	msgs       []chatMsg
+	streaming  bytes.Buffer
+	currentRun string
 
-	// Bridge
-	var br *bridge
-	var err error
-	appendLine := func(line string) {
-		chatView.SetText(chatView.Text + line + "\n")
-		chatView.CursorRow = strings.Count(chatView.Text, "\n")
+	draft string
+	busy  bool
+
+	// ask_user modal
+	askOpen     bool
+	askQuestion string
+	askOptions  []string
+	askReqID    string
+	askDraft    string
+
+	br *bridge
+}
+
+func (s *appState) view(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Fill().Padding(12).Gap(8).Children(func() {
+		// Title + status
+		ui.Row(c).Justify(ui.SpaceBetween).Children(func() {
+			ui.Text(c, "Akari — MyGo").FontSize(18).Bold()
+			ui.Text(c, s.status).TextColor(t.TextMuted)
+		})
+		// Chat area
+		ui.Scroll(c).Grow(1).Padding(8).Gap(8).Children(func() {
+			for _, m := range s.msgs {
+				if m.you {
+					ui.RichText(c,
+						ui.Span{Text: "You:", Weight: 600},
+					).Children(func() {
+						ui.Text(c, " "+m.text)
+					})
+				} else {
+					ui.RichText(c,
+						ui.Span{Text: "Akari:", Weight: 600, Color: t.Accent},
+					).Children(func() {
+						ui.Text(c, " "+m.text)
+					})
+				}
+			}
+			// streaming line
+			if s.streaming.Len() > 0 {
+				ui.RichText(c,
+					ui.Span{Text: "Akari:", Weight: 600, Color: t.Accent},
+				).Children(func() {
+					ui.Text(c, " "+s.streaming.String())
+				})
+			}
+		})
+		// Composer
+		ui.Column(c).Gap(8).Children(func() {
+			ta := ui.TextArea(c, &s.draft).Lines(1, 8).Placeholder("Type a message…")
+			ta.OnTextKey(func(k ui.TextKey) bool {
+				switch {
+				case k.Key == ui.KeyEnter && k.Mods == 0:
+					s.send()
+					k.SetText("")
+					return true
+				}
+				return false
+			})
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Stop").Disabled(!s.busy).Clicked() {
+					if s.br != nil {
+						_ = s.br.stop()
+					}
+				}
+				if ui.PrimaryButton(c, "Send").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+					s.send()
+				}
+			})
+		})
+	})
+
+	// ask_user dialog
+	ui.Modal(c, &s.askOpen, func() {
+		ui.Column(c).Width(420).Padding(16).Gap(12).Background(t.Background).Radius(12).Children(func() {
+			ui.Text(c, "Assistant asks").FontSize(16).Bold()
+			ui.Text(c, s.askQuestion)
+			if len(s.askOptions) > 0 {
+				ui.Row(c).Wrap().Gap(8).Children(func() {
+					for _, opt := range s.askOptions {
+						o := opt
+						if ui.Button(c, o).Clicked() {
+							s.answerAsk(o)
+							s.askOpen = false
+						}
+					}
+				})
+				ui.Text(c, "Or type your answer:").TextColor(t.TextMuted)
+			}
+			ui.TextInput(c, &s.askDraft).Placeholder("Type your answer…").AutoFocus()
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					s.askOpen = false
+					s.askDraft = ""
+				}
+				if ui.PrimaryButton(c, "Submit").Clicked() {
+					s.answerAsk(strings.TrimSpace(s.askDraft))
+					s.askOpen = false
+					s.askDraft = ""
+				}
+			})
+		})
+	})
+}
+
+func (s *appState) send() {
+	text := strings.TrimSpace(s.draft)
+	if text == "" || s.br == nil {
+		return
 	}
-	var assistantBuf bytes.Buffer
-	var currentMsgID string
-	var once sync.Once
-	initBridge := func() {
-		var initErr error
-		br, initErr = newBridge()
-		if initErr != nil {
-			status.SetText("Bridge error: " + initErr.Error())
+	// Warn about missing key in status (non-blocking)
+	if os.Getenv("DEEPSEEK_API_KEY") == "" &&
+		os.Getenv("OPENAI_API_KEY") == "" &&
+		os.Getenv("MAIN_VITE_API_KEY") == "" {
+		s.status = "No API key set (DEEPSEEK_API_KEY/OPENAI_API_KEY)"
+	}
+	id := fmt.Sprintf("m-%d", time.Now().UnixNano())
+	s.msgs = append(s.msgs, chatMsg{you: true, text: text})
+	s.draft = ""
+	s.busy = true
+	if err := s.br.send(id, text); err != nil {
+		s.msgs = append(s.msgs, chatMsg{you: false, text: "⚠ send failed: " + err.Error()})
+		s.busy = false
+	}
+}
+
+func (s *appState) answerAsk(ans string) {
+	if s.br != nil && s.askReqID != "" {
+		if ans == "" {
+			ans = "(no answer)"
+		}
+		_ = s.br.askAnswer(s.askReqID, ans)
+	}
+}
+
+func main() {
+	state := &appState{
+		status: "Starting pi bridge…",
+	}
+	mygo.App.WhenReady(func() {
+		win := mygo.NewWindow(mygo.WindowOptions{
+			Title:  "Akari — MyGo",
+			Width:  900,
+			Height: 640,
+			Content: ui.View(func(c *ui.Context) {
+				state.view(c)
+			}),
+		})
+		state.win = win
+		// Start Node bridge
+		br, err := newBridge()
+		if err != nil {
+			win.Update(func() {
+				state.status = "Bridge error: " + err.Error()
+			})
 			return
 		}
+		state.br = br
 		_ = br.init("deepseek", "deepseek-v4-flash")
 		go func() {
 			for br.stdout.Scan() {
@@ -185,116 +317,48 @@ func main() {
 				}
 				switch ev.Type {
 				case "ready":
-					status.SetText(fmt.Sprintf("pi ready: %s · %s", ev.Provider, ev.Model))
+					win.Update(func() {
+						state.status = fmt.Sprintf("pi ready: %s · %s", ev.Provider, ev.Model)
+					})
 				case "assistant_delta":
-					if currentMsgID != ev.ID {
-						currentMsgID = ev.ID
-						assistantBuf.Reset()
-						appendLine("Akari:")
-					}
-					assistantBuf.WriteString(ev.Text)
-					chatView.SetText(strings.TrimRight(chatView.Text, "\n") + "\n" + assistantBuf.String())
-				case "assistant_done":
-					currentMsgID = ""
-					assistantBuf.WriteString("\n")
-					chatView.SetText(strings.TrimRight(chatView.Text, "\n") + "\n" + assistantBuf.String())
-					assistantBuf.Reset()
-					stopBtn.Disable()
-					sendBtn.Enable()
-					if br != nil {
-						br.running = false
-					}
-				case "error":
-					appendLine("⚠ " + ev.Message)
-					stopBtn.Disable()
-					sendBtn.Enable()
-					if br != nil {
-						br.running = false
-					}
-				case "ask_request":
-					// Simple approval/ask stub: show a dialog with options or free text.
-					once.Do(func() {}) // placeholder to avoid import errors if not used
-					showAskDialog(w, ev, func(answer string) {
-						if br != nil {
-							_ = br.askAnswer(ev.RequestID, answer)
+					win.Update(func() {
+						if state.currentRun != ev.ID {
+							state.currentRun = ev.ID
+							state.streaming.Reset()
 						}
+						state.streaming.WriteString(ev.Text)
+					})
+				case "assistant_done":
+					win.Update(func() {
+						if state.streaming.Len() > 0 {
+							state.msgs = append(state.msgs, chatMsg{you: false, text: state.streaming.String()})
+						}
+						state.streaming.Reset()
+						state.currentRun = ""
+						state.busy = false
+					})
+				case "error":
+					win.Update(func() {
+						state.msgs = append(state.msgs, chatMsg{you: false, text: "⚠ " + ev.Message})
+						state.streaming.Reset()
+						state.currentRun = ""
+						state.busy = false
+					})
+				case "ask_request":
+					win.Update(func() {
+						state.askOpen = true
+						state.askQuestion = ev.Question
+						state.askOptions = append([]string(nil), ev.Options...)
+						state.askReqID = ev.RequestID
+						state.askDraft = ""
 					})
 				default:
 					// ignore
 				}
 			}
 		}()
-	}
-	initBridge()
-
-	send := func() {
-		text := strings.TrimSpace(input.Text)
-		if text == "" || br == nil {
-			return
-		}
-		if os.Getenv("DEEPSEEK_API_KEY") == "" &&
-			os.Getenv("OPENAI_API_KEY") == "" &&
-			os.Getenv("MAIN_VITE_API_KEY") == "" {
-			dialog.ShowInformation("Missing API key", "No API key found in environment (DEEPSEEK_API_KEY / OPENAI_API_KEY).\nThe agent will likely fail to reply. Set a key and restart.", w)
-		}
-		id := fmt.Sprintf("m-%d", time.Now().UnixNano())
-		appendLine("You: " + text)
-		input.SetText("")
-		sendBtn.Disable()
-		stopBtn.Enable()
-		if err := br.send(id, text); err != nil {
-			appendLine("⚠ send failed: " + err.Error())
-			stopBtn.Disable()
-			sendBtn.Enable()
-		}
-	}
-	sendBtn.OnTapped = send
-	stopBtn.OnTapped = func() {
-		if br != nil {
-			_ = br.stop()
-		}
-	}
-
-	inputScroll := container.NewVScroll(input)
-	inputScroll.SetMinSize(fyne.NewSize(0, 120))
-	controls := container.NewBorder(nil, nil, nil, container.NewHBox(stopBtn, sendBtn), status)
-	body := container.NewBorder(nil, inputScroll, nil, nil, chatView)
-	w.SetContent(container.NewBorder(nil, controls, nil, nil, body))
-	w.SetOnClosed(func() {
-		if br != nil {
-			br.close()
-		}
 	})
-	w.ShowAndRun()
-}
-
-func showAskDialog(win fyne.Window, ev ndjsonEvent, onAnswer func(string)) {
-	q := widget.NewLabel(ev.Question)
-	var selected string
-	form := &widget.Form{}
-	if len(ev.Options) > 0 {
-		// radio group for options
-		radio := widget.NewRadioGroup(ev.Options, func(s string) { selected = s })
-		radio.Required = false
-		form.Append("Options", radio)
+	if err := mygo.App.Run(); err != nil {
+		log.Fatal(err)
 	}
-	entry := widget.NewEntry()
-	entry.SetPlaceHolder("Type your answer…")
-	form.Append("Answer", entry)
-	d := dialog.NewCustomConfirm("Assistant asks", "Submit", "Cancel",
-		container.NewVBox(q, form),
-		func(ok bool) {
-			if !ok {
-				return
-			}
-			answer := strings.TrimSpace(selected)
-			if answer == "" {
-				answer = strings.TrimSpace(entry.Text)
-			}
-			if answer == "" {
-				answer = "(no answer)"
-			}
-			onAnswer(answer)
-		}, win)
-	d.Show()
 }

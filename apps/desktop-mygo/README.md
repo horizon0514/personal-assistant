@@ -1,10 +1,10 @@
 # Akari Desktop (MyGo)
 
-A minimal Go (Fyne) desktop chat app that hosts the UI and talks to the `pi` runtime via a local NDJSON stdio bridge.
+A minimal MyGo native UI desktop chat app that hosts the UI and talks to the `pi` runtime via a local NDJSON stdio bridge.
 
 ## Architecture
 
-- UI: Go + Fyne (`apps/desktop-mygo`)
+- UI: MyGo native UI in Go (`apps/desktop-mygo`)
 - Bridge: Node NDJSON stdio process (`apps/pi-bridge/index.mjs`) using `@earendil-works/pi-agent-core` and `@earendil-works/pi-ai`
 - Protocol: NDJSON over stdio — init, send, stream deltas, ask_user round‑trip
 
@@ -12,7 +12,7 @@ See `ARCHITECTURE.md` at repo root for details and deferred items.
 
 ## Prerequisites
 
-- Go 1.22+
+- Go 1.27.3+ (per MyGo)
 - Node 22+ and `pnpm` (to install `@earendil-works/*` dependencies used by the bridge)
 - A model API key (DeepSeek preferred):
   - Export `DEEPSEEK_API_KEY` (preferred), or `OPENAI_API_KEY`, or `MAIN_VITE_API_KEY`

@@ -2,7 +2,7 @@ Akari — Clean Architecture (MVP)
 
 Overview
 
-- Host/UI: MyGo (Go + Fyne) in apps/desktop-mygo
+- Host/UI: MyGo (native Go UI) in apps/desktop-mygo
 - Agent core: pi (earendil-works/pi) hosted out-of-process in a local Node stdio bridge at apps/pi-bridge
 - Protocol: NDJSON over stdio
   - init: provider/model
@@ -19,7 +19,7 @@ Why this shape
 
 Processes and responsibilities
 
-- apps/desktop-mygo (Go UI)
+- apps/desktop-mygo (MyGo native UI)
   - Renders a normal chat window
   - Starts and supervises the Node bridge subprocess
   - Sends user messages and displays streaming deltas
