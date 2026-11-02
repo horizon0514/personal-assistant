@@ -128,9 +128,17 @@ function buildAgent() {
 async function handleInit(msg) {
   provider = typeof msg.provider === "string" && msg.provider ? msg.provider : provider;
   modelId = typeof msg.model === "string" && msg.model ? msg.model : modelId;
+  const cwd = typeof msg.cwd === "string" && msg.cwd ? msg.cwd : undefined;
   try {
+    if (cwd) {
+      try {
+        process.chdir(cwd);
+      } catch (e) {
+        emit({ type: "error", message: `failed to chdir to cwd: ${cwd}: ${String(e)}` });
+      }
+    }
     agent = buildAgent();
-    emit({ type: "ready", provider, model: modelId });
+    emit({ type: "ready", provider, model: modelId, cwd: cwd ?? process.cwd() });
   } catch (e) {
     emit({ type: "error", message: `init failed: ${String(e)}` });
   }
