@@ -320,35 +320,34 @@ type appState struct {
 func (s *appState) view(c *ui.Context) {
 	t := c.Theme()
 	ui.Row(c).Fill().Children(func() {
-		// Sidebar
-		ui.Column(c).Width(260).Padding(12).Gap(8).Background(ui.RGBA(28, 28, 30, 1)).Children(func() {
+		// Sidebar (softer, light)
+		ui.Column(c).Width(260).Padding(14).Gap(10).Background(t.Surface).Children(func() {
 			ui.Row(c).Justify(ui.SpaceBetween).Children(func() {
-				ui.Text(c, "chatgo").FontSize(16).Bold()
+				ui.Text(c, "chatgo").FontSize(18).Bold()
 			})
-			// New chat
+			// New chat / Bind
 			if ui.PrimaryButton(c, "New chat").Clicked() {
 				s.newChat()
 			}
-			// Bind workspace (for selected)
 			if ui.Button(c, "Bind workspace…").Clicked() {
 				s.bindWorkspace()
 			}
-			// Sessions list
 			ui.Text(c, "Sessions").TextColor(t.TextMuted)
 			for _, sm := range s.sessions {
 				itemID := sm.ID
-				row := ui.Column(c.Key(itemID)).Padding(8).Radius(8)
+				row := ui.Column(c.Key(itemID)).Padding(10).Radius(10)
 				if itemID == s.selected {
-					row.Background(ui.RGBA(60, 60, 64, 1))
+					row.Background(ui.RGBA(238, 238, 240, 1))
 				}
 				row.Children(func() {
 					title := sm.Title
 					if sm.Primary {
+						// subtle star
 						title = "★ " + title
 					}
 					ui.Text(c, title).SingleLine()
 					if sm.WorkspaceDir != "" {
-						ui.Text(c, sm.WorkspaceDir).TextColor(t.TextMuted).FontSize(11).SingleLine()
+						ui.Text(c, sm.WorkspaceDir).TextColor(t.TextMuted).FontSize(10).SingleLine()
 					}
 				})
 				if row.Clicked() {
@@ -359,101 +358,109 @@ func (s *appState) view(c *ui.Context) {
 			ui.Text(c, s.status).FontSize(11).TextColor(t.TextMuted)
 		})
 		// Main pane
-		ui.Column(c).Grow(1).Padding(12).Gap(8).Children(func() {
+		ui.Column(c).Grow(1).Padding(16).Gap(12).Children(func() {
 			// Chat area
-			ui.Scroll(c).Grow(1).Padding(8).Gap(8).Children(func() {
+			ui.Scroll(c).Grow(1).Padding(8).Gap(12).Children(func() {
 				for _, m := range s.msgs {
 					if m.you {
-						ui.RichText(c,
-							ui.Span{Text: "You:", Weight: 600},
-						).Children(func() {
-							ui.Text(c, " "+m.text)
+						// user bubble
+						ui.Column(c).Children(func() {
+							ui.Text(c, "You").FontSize(12).TextColor(t.TextMuted)
+							ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(236, 243, 255, 1)).Children(func() {
+								ui.Text(c, m.text)
+							})
 						})
 					} else {
-						ui.RichText(c,
-							ui.Span{Text: "chatgo:", Weight: 600, Color: t.Accent},
-						).Children(func() {
-							ui.Text(c, " "+m.text)
+						// assistant bubble
+						ui.Column(c).Children(func() {
+							ui.Text(c, "chatgo").FontSize(12).TextColor(t.TextMuted)
+							ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(245, 245, 247, 1)).Children(func() {
+								ui.Text(c, m.text)
+								// very quiet tool stub
+								ui.Text(c, "(tools: not wired)").FontSize(10).TextColor(t.TextMuted)
+							})
 						})
-						// Tool-call visibility stub
-						ui.Text(c, "(tools: not wired)").FontSize(11).TextColor(t.TextMuted)
 					}
 				}
 				// streaming line
 				if s.streaming.Len() > 0 {
-					ui.RichText(c,
-						ui.Span{Text: "chatgo:", Weight: 600, Color: t.Accent},
-					).Children(func() {
-						ui.Text(c, " "+s.streaming.String())
+					ui.Column(c).Children(func() {
+						ui.Text(c, "chatgo").FontSize(12).TextColor(t.TextMuted)
+						ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(245, 245, 247, 1)).Children(func() {
+							ui.Text(c, s.streaming.String())
+						})
 					})
 				}
 			})
-			// Composer
+			// Composer bar
 			ui.Column(c).Gap(8).Children(func() {
-				ta := ui.TextArea(c, &s.draft).Lines(1, 8).Placeholder("Type a message…")
-				ta.OnTextKey(func(k ui.TextKey) bool {
-					switch {
-					case k.Key == ui.KeyEnter && k.Mods == 0:
-						s.send()
-						k.SetText("")
-						return true
-					}
-					return false
-				})
-		ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
-			// Assign control (primary session only)
-			if sm := s.currentSession(); sm != nil && sm.Primary {
-				if ui.Button(c, "Assign…").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
-					s.assignOpen = !s.assignOpen
-				}
-			}
-					if ui.Button(c, "Stop").Disabled(!s.busy).Clicked() {
-						if s.br != nil {
-							_ = s.br.stop()
+				// Styled input area
+				ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(250, 250, 252, 1)).Children(func() {
+					ta := ui.TextArea(c, &s.draft).Lines(1, 6).Placeholder("Type a message…")
+					ta.OnTextKey(func(k ui.TextKey) bool {
+						switch {
+						case k.Key == ui.KeyEnter && k.Mods == 0:
+							s.send()
+							k.SetText("")
+							return true
 						}
-					}
-					if ui.PrimaryButton(c, "Send").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
-						s.send()
-					}
-				})
-		// Assign overlay
-		if s.assignOpen {
-			ui.Column(c).Padding(10).Radius(10).Background(ui.RGBA(36, 36, 40, 1)).Gap(6).Children(func() {
-				ui.Text(c, "Assign to session").Bold()
-				for _, sm := range s.sessions {
-					if sm.ID == s.selected {
-						continue
-					}
-					lbl := sm.Title
-					if sm.WorkspaceDir != "" {
-						lbl = fmt.Sprintf("%s  ·  %s", lbl, sm.WorkspaceDir)
-					}
-					if ui.Button(c, lbl).Clicked() {
-						s.dispatchTo(sm.ID, strings.TrimSpace(s.draft))
-						s.draft = ""
-						s.assignOpen = false
-					}
-				}
-				if ui.Button(c, "New worker…").Clicked() {
-					// optional workspace
-					var ws string
-					paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-						Parent:    s.win,
-						Title:     "Choose workspace folder (optional)",
-						Directory: true,
+						return false
 					})
-					if err == nil && len(paths) > 0 {
-						ws = paths[0]
-					}
-					newID := s.newWorkerWithOptionalFolder(ws)
-					if newID != "" {
-						s.dispatchTo(newID, strings.TrimSpace(s.draft))
-						s.draft = ""
-						s.assignOpen = false
-					}
+					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+						// Assign (secondary), Stop (secondary), Send (primary)
+						if sm := s.currentSession(); sm != nil && sm.Primary {
+							if ui.Button(c, "Assign…").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+								s.assignOpen = !s.assignOpen
+							}
+						}
+						if ui.Button(c, "Stop").Disabled(!s.busy).Clicked() {
+							if s.br != nil {
+								_ = s.br.stop()
+							}
+						}
+						if ui.PrimaryButton(c, "Send").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+							s.send()
+						}
+					})
+				})
+				// Assign overlay (light, non-modal)
+				if s.assignOpen {
+					ui.Column(c).Padding(12).Radius(12).Background(ui.RGBA(255, 255, 255, 1)).Gap(6).Children(func() {
+						ui.Text(c, "Assign to session").Bold()
+						for _, sm := range s.sessions {
+							if sm.ID == s.selected {
+								continue
+							}
+							lbl := sm.Title
+							if sm.WorkspaceDir != "" {
+								lbl = fmt.Sprintf("%s  ·  %s", lbl, sm.WorkspaceDir)
+							}
+							if ui.Button(c, lbl).Clicked() {
+								s.dispatchTo(sm.ID, strings.TrimSpace(s.draft))
+								s.draft = ""
+								s.assignOpen = false
+							}
+						}
+						if ui.Button(c, "New worker…").Clicked() {
+							// optional workspace
+							var ws string
+							paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+								Parent:    s.win,
+								Title:     "Choose workspace folder (optional)",
+								Directory: true,
+							})
+							if err == nil && len(paths) > 0 {
+								ws = paths[0]
+							}
+							newID := s.newWorkerWithOptionalFolder(ws)
+							if newID != "" {
+								s.dispatchTo(newID, strings.TrimSpace(s.draft))
+								s.draft = ""
+								s.assignOpen = false
+							}
+						}
+					})
 				}
-			})
-		}
 			})
 		})
 	})
