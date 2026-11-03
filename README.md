@@ -53,9 +53,21 @@ pnpm --filter @pa/desktop build   # 构建 desktop
 - `MAIN_VITE_PROVIDER` / `MAIN_VITE_MODEL` / `MAIN_VITE_API_KEY` — dev 兜底的模型与 Key
 - `MAIN_VITE_VISION=1` — 强制把模型标注为支持图片输入(默认关;仅当所用模型的 API 真收图时再开)
 
+### MyGo 桌面版(MVP)
+
+我们新增了一个基于 MyGo(native UI, Go) 的桌面最小外壳,方便逐步替换 Electron 外壳(不追求一次性完全同构)。
+
+- 位置: `apps/desktop-mygo`
+- 运行:
+  - 可选:设置 `DEEPSEEK_API_KEY=...`(没设则使用本地模拟流式回复,用于验证 UI)
+  - `cd apps/desktop-mygo && go run .`
+- 当前范围:单窗体聊天(发送 + 流式回复/停止),中文友好展示。
+- 后续逐步补齐:浏览器/CDP 自动化、cap-* 能力接线、记忆/工作区/定时任务、Keychain、打包签名与自动更新等。
+
 ## 目录
 
 - `apps/desktop` — Electron(main + preload + renderer/React)
+- `apps/desktop-mygo` — MyGo 桌面 MVP(Go, native UI)
 - `apps/site` — Akari 官网(下载落地页)
 - `packages/domain-core` — 共享领域类型与事件
 - `packages/ctx-*` — 限界上下文(task / trust / reversibility / memory)
