@@ -3,14 +3,14 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -19,330 +19,848 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Message is one chat turn message.
-type Message struct {
-	Role string
-	Text string
+// ─── Sessions persistence (JSONL under config dir) ─────────────────────────────
+type transcriptLine struct {
+	Type      string `json:"type"` // "user" | "assistant"
+	Text      string `json:"text"`
+	Timestamp int64  `json:"ts"`
 }
 
-// ChatClient calls DeepSeek (OpenAI-compatible) or falls back to a mocked stream.
-type ChatClient struct {
-	Endpoint string // default https://api.deepseek.com/chat/completions
-	Model    string // e.g. deepseek-v4-flash or deepseek-chat
-	APIKey   string // empty = mock
-	Client   *http.Client
+type sessionMeta struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	File         string `json:"file"` // absolute path to transcript .jsonl
+	WorkspaceDir string `json:"workspaceDir,omitempty"`
+	UpdatedAt    int64  `json:"updatedAt"`
+	Primary      bool   `json:"primary,omitempty"`
 }
 
-func (cc *ChatClient) endpoint() string {
-	if cc.Endpoint != "" {
-		return cc.Endpoint
+type sessionIndex struct {
+	Sessions []sessionMeta `json:"sessions"`
+}
+
+func appDataDir() string {
+	if v := os.Getenv("CHATGO_DATA_DIR"); v != "" {
+		return v
 	}
-	return "https://api.deepseek.com/chat/completions"
+	base, err := os.UserConfigDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			return "./chatgo-data"
+		}
+		return filepath.Join(home, ".config", "chatgo")
+	}
+	return filepath.Join(base, "chatgo")
 }
 
-// StreamChat sends history + prompt and streams assistant deltas via onDelta.
-// Returns when done or on error/cancel.
-func (cc *ChatClient) StreamChat(ctx context.Context, history []Message, prompt string, onDelta func(string)) error {
-	if strings.TrimSpace(cc.APIKey) == "" {
-		// Mock streaming: type out a placeholder reply.
-		mock := "这是一个占位回复。未检测到 DEEPSEEK_API_KEY，当前以本地模拟流式输出代替。"
-		ticker := time.NewTicker(80 * time.Millisecond)
-		defer ticker.Stop()
-		var i int
-		for {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-ticker.C:
-				if i >= len(mock) {
-					return nil
-				}
-				onDelta(string(mock[i]))
-				i++
-			}
+func ensureDirs() (root, sessionsDir, indexPath string, err error) {
+	root = appDataDir()
+	sessionsDir = filepath.Join(root, "sessions")
+	indexPath = filepath.Join(root, "sessions.json")
+	if err = os.MkdirAll(sessionsDir, 0o755); err != nil {
+		return
+	}
+	return
+}
+
+func loadSessionIndex() (sessionIndex, error) {
+	root, _, indexPath, err := ensureDirs()
+	if err != nil {
+		return sessionIndex{}, err
+	}
+	f, err := os.Open(indexPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return sessionIndex{Sessions: []sessionMeta{}}, nil
+		}
+		return sessionIndex{}, err
+	}
+	defer f.Close()
+	var idx sessionIndex
+	if err := json.NewDecoder(f).Decode(&idx); err != nil && err != io.EOF {
+		_ = os.Rename(indexPath, indexPath+".corrupt")
+		return sessionIndex{Sessions: []sessionMeta{}}, nil
+	}
+	for i := range idx.Sessions {
+		if !filepath.IsAbs(idx.Sessions[i].File) {
+			idx.Sessions[i].File = filepath.Join(root, idx.Sessions[i].File)
 		}
 	}
+	return idx, nil
+}
 
-	// Build OpenAI-compatible request body
-	type chatMsg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+func saveSessionIndex(idx sessionIndex) error {
+	_, _, indexPath, err := ensureDirs()
+	if err != nil {
+		return err
 	}
-	reqBody := struct {
-		Model    string    `json:"model"`
-		Stream   bool      `json:"stream"`
-		Messages []chatMsg `json:"messages"`
-	}{
-		Model:  cc.modelOrDefault(),
-		Stream: true,
+	tmp := indexPath + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
 	}
-	for _, m := range history {
-		if m.Role != "user" && m.Role != "assistant" && m.Role != "system" {
+	enc := json.NewEncoder(f)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(&idx); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	return os.Rename(tmp, indexPath)
+}
+
+func newSessionMeta(title string) (sessionMeta, error) {
+	_, sessionsDir, _, err := ensureDirs()
+	if err != nil {
+		return sessionMeta{}, err
+	}
+	id := fmt.Sprintf("s-%d", time.Now().UnixNano())
+	path := filepath.Join(sessionsDir, id+".jsonl")
+	return sessionMeta{
+		ID:        id,
+		Title:     title,
+		File:      path,
+		UpdatedAt: time.Now().Unix(),
+	}, nil
+}
+
+func appendTranscriptLine(sm *sessionMeta, line transcriptLine) error {
+	f, err := os.OpenFile(sm.File, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := json.NewEncoder(f).Encode(&line); err != nil {
+		return err
+	}
+	sm.UpdatedAt = time.Now().Unix()
+	return nil
+}
+
+func readTranscript(sm sessionMeta) ([]chatMsg, error) {
+	f, err := os.Open(sm.File)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	var out []chatMsg
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var tl transcriptLine
+		if err := json.Unmarshal([]byte(sc.Text()), &tl); err != nil {
 			continue
 		}
-		reqBody.Messages = append(reqBody.Messages, chatMsg{Role: m.Role, Content: m.Text})
+		if tl.Type == "user" {
+			out = append(out, chatMsg{you: true, text: tl.Text})
+		} else if tl.Type == "assistant" {
+			out = append(out, chatMsg{you: false, text: tl.Text})
+		}
 	}
-	reqBody.Messages = append(reqBody.Messages, chatMsg{Role: "user", Content: prompt})
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(&reqBody); err != nil {
-		return err
-	}
+	return out, nil
+}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cc.endpoint(), &buf)
+type ndjsonEvent struct {
+	Type      string   `json:"type"`
+	ID        string   `json:"id,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	RequestID string   `json:"requestId,omitempty"`
+	Question  string   `json:"question,omitempty"`
+	Options   []string `json:"options,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Model     string   `json:"model,omitempty"`
+}
+
+type ndjsonMsg struct {
+	Type      string `json:"type"`
+	ID        string `json:"id,omitempty"`
+	Text      string `json:"text,omitempty"`
+	RequestID string `json:"requestId,omitempty"`
+	Answer    string `json:"answer,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
+	Cwd       string `json:"cwd,omitempty"`
+}
+
+type bridge struct {
+	cmd     *exec.Cmd
+	stdin   *bufio.Writer
+	stdout  *bufio.Scanner
+	mu      sync.Mutex
+	running bool
+}
+
+func newBridge() (*bridge, error) {
+	// Resolve Node bridge path relative to repo root (apps/pi-bridge/index.mjs).
+	workdir, err := findWorkspaceRoot()
+	if err != nil {
+		return nil, err
+	}
+	script := filepath.Join(workdir, "apps", "pi-bridge", "index.mjs")
+	if _, err := os.Stat(script); err != nil {
+		return nil, fmt.Errorf("pi bridge not found at %s; run `pnpm install` and ensure workspace is checked out", script)
+	}
+	node := "node"
+	if runtime.GOOS == "windows" {
+		node += ".exe"
+	}
+	cmd := exec.Command(node, script)
+	cmd.Dir = workdir
+	stdin, _ := cmd.StdinPipe()
+	stdout, _ := cmd.StdoutPipe()
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	b := &bridge{
+		cmd:    cmd,
+		stdin:  bufio.NewWriter(stdin),
+		stdout: bufio.NewScanner(stdout),
+	}
+	return b, nil
+}
+
+func (b *bridge) writeJSON(v any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cc.APIKey)
-
-	client := cc.Client
-	if client == nil {
-		client = &http.Client{
-			Timeout: 0, // no global timeout; rely on ctx
-		}
-	}
-	resp, err := client.Do(req)
+	data = append(data, '\n')
+	_, err = b.stdin.Write(data)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
-		if len(b) == 0 {
-			return fmt.Errorf("deepseek http %d", resp.StatusCode)
-		}
-		return fmt.Errorf("deepseek http %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
-	}
+	return b.stdin.Flush()
+}
 
-	reader := bufio.NewReader(resp.Body)
+func (b *bridge) init(provider, model, cwd string) error {
+	return b.writeJSON(ndjsonMsg{Type: "init", Provider: provider, Model: model, Cwd: cwd})
+}
+
+func (b *bridge) send(id, text string) error {
+	b.running = true
+	return b.writeJSON(ndjsonMsg{Type: "send", ID: id, Text: text})
+}
+
+func (b *bridge) stop() error {
+	return b.writeJSON(ndjsonMsg{Type: "stop"})
+}
+
+func (b *bridge) askAnswer(reqID, answer string) error {
+	return b.writeJSON(ndjsonMsg{Type: "ask_answer", RequestID: reqID, Answer: answer})
+}
+
+func (b *bridge) close() {
+	_ = b.stop()
+	_ = b.cmd.Process.Kill()
+}
+
+func findWorkspaceRoot() (string, error) {
+	// Walk up to find pnpm-workspace.yaml as a simple repo root heuristic.
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
 	for {
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, "data:") {
-				data := strings.TrimSpace(strings.TrimPrefix(trim, "data:"))
-				if data == "[DONE]" {
-					return nil
-				}
-				var ev struct {
-					Choices []struct {
-						Delta struct {
-							Content string `json:"content"`
-						} `json:"delta"`
-					} `json:"choices"`
-				}
-				if err := json.Unmarshal([]byte(data), &ev); err == nil {
-					if len(ev.Choices) > 0 {
-						onDelta(ev.Choices[0].Delta.Content)
-					}
-				}
-			}
+		if _, err := os.Stat(filepath.Join(dir, "pnpm-workspace.yaml")); err == nil {
+			return dir, nil
 		}
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
 		}
+		dir = parent
 	}
+	return "", fmt.Errorf("could not find pnpm-workspace.yaml up the tree")
 }
 
-func (cc *ChatClient) modelOrDefault() string {
-	m := strings.TrimSpace(cc.Model)
-	if m != "" {
-		return m
-	}
-	// deepseek-v4-flash is used in the Electron app; deepseek-chat is widely compatible
-	if v := os.Getenv("AKARI_MODEL"); strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
-	}
-	return "deepseek-chat"
+type chatMsg struct {
+	you  bool
+	text string
 }
-
-// --- App state and UI ---
 
 type appState struct {
-	mu            sync.Mutex
-	messages      []Message
-	input         string
-	isStreaming   bool
-	lastError     string
-	cancelCurrent context.CancelFunc
-	chat          *ChatClient
-	win           *mygo.Window
+	win *mygo.Window
+
+	status string
+
+	msgs       []chatMsg
+	streaming  bytes.Buffer
+	currentRun string
+
+	draft string
+	busy  bool
+	assignOpen bool
+
+	// ask_user modal
+	askOpen     bool
+	askQuestion string
+	askOptions  []string
+	askReqID    string
+	askDraft    string
+
+	br *bridge
+
+	// sessions
+	sessions []sessionMeta
+	selected string // session id
+
+	// background dispatch
+	activeRunSession string
+	bgStreaming      map[string]*bytes.Buffer // sessionID -> buffer
 }
 
-func newApp() *appState {
-	return &appState{
-		messages: []Message{},
-		chat: &ChatClient{
-			APIKey:   os.Getenv("DEEPSEEK_API_KEY"),
-			Model:    os.Getenv("AKARI_MODEL"),
-			Endpoint: os.Getenv("AKARI_DEEPSEEK_ENDPOINT"),
-		},
-	}
-}
-
-func (a *appState) appendMessage(role, text string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.messages = append(a.messages, Message{Role: role, Text: text})
-}
-
-func (a *appState) setAssistantDelta(delta string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	// Ensure last message is assistant; if not present, append one.
-	if len(a.messages) == 0 || a.messages[len(a.messages)-1].Role != "assistant" {
-		a.messages = append(a.messages, Message{Role: "assistant", Text: ""})
-	}
-	a.messages[len(a.messages)-1].Text += delta
-}
-
-func (a *appState) startSend() {
-	if a.isStreaming {
-		return
-	}
-	text := strings.TrimSpace(a.input)
-	if text == "" {
-		return
-	}
-
-	// Snapshot history excluding any ongoing assistant stub.
-	a.mu.Lock()
-	var history []Message
-	for _, m := range a.messages {
-		// only pass user and assistant history
-		if m.Role == "user" || m.Role == "assistant" || m.Role == "system" {
-			history = append(history, m)
-		}
-	}
-	a.input = ""
-	a.isStreaming = true
-	a.lastError = ""
-	a.mu.Unlock()
-
-	a.appendMessage("user", text)
-	ctx, cancel := context.WithCancel(context.Background())
-	a.mu.Lock()
-	a.cancelCurrent = cancel
-	a.mu.Unlock()
-
-	go func() {
-		err := a.chat.StreamChat(ctx, history, text, func(delta string) {
-			// Update state on the main thread and redraw.
-			if a.win != nil {
-				a.win.Update(func() {
-					a.setAssistantDelta(delta)
-				})
-			} else {
-				a.setAssistantDelta(delta)
-			}
-		})
-		if err != nil && !errors.Is(err, context.Canceled) {
-			if a.win != nil {
-				a.win.Update(func() { a.lastError = err.Error() })
-			} else {
-				a.mu.Lock()
-				a.lastError = err.Error()
-				a.mu.Unlock()
-			}
-		}
-		// Mark end of stream.
-		if a.win != nil {
-			a.win.Update(func() {
-				a.isStreaming = false
-				a.cancelCurrent = nil
+func (s *appState) view(c *ui.Context) {
+	t := c.Theme()
+	ui.Row(c).Fill().Children(func() {
+		// Sidebar (softer, light)
+		ui.Column(c).Width(260).Padding(14).Gap(10).Background(t.Surface).Children(func() {
+			ui.Row(c).Justify(ui.SpaceBetween).Children(func() {
+				ui.Text(c, "chatgo").FontSize(18).Bold()
 			})
-		} else {
-			a.mu.Lock()
-			a.isStreaming = false
-			a.cancelCurrent = nil
-			a.mu.Unlock()
-		}
-	}()
-}
-
-func (a *appState) stopStream() {
-	a.mu.Lock()
-	cancel := a.cancelCurrent
-	a.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
-}
-
-func (a *appState) hasAPIKey() bool {
-	return strings.TrimSpace(a.chat.APIKey) != ""
-}
-
-// view renders the UI for each frame.
-func (a *appState) view(c *ui.Context) {
-	ui.Column(c).Fill().Gap(8).Children(func() {
-		// Header
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, "Akari").Bold().FontSize(16)
-			status := "· DeepSeek 已配置"
-			if !a.hasAPIKey() {
-				status = "· 未检测到 DEEPSEEK_API_KEY，将用本地模拟回复"
+			// New chat / Bind
+			if ui.PrimaryButton(c, "New chat").Clicked() {
+				s.newChat()
 			}
-			ui.Text(c, status)
-		})
-
-		// Messages
-		ui.Column(c).Fill().Grow(1).Padding(8).Children(func() {
-			a.mu.Lock()
-			msgs := make([]Message, len(a.messages))
-			copy(msgs, a.messages)
-			errText := a.lastError
-			a.mu.Unlock()
-			for _, m := range msgs {
-				prefix := "助理"
-				if m.Role == "user" {
-					prefix = "我"
-				} else if m.Role == "system" {
-					prefix = "系统"
+			if ui.Button(c, "Bind workspace…").Clicked() {
+				s.bindWorkspace()
+			}
+			ui.Text(c, "Sessions").TextColor(t.TextMuted)
+			for _, sm := range s.sessions {
+				itemID := sm.ID
+				row := ui.Column(c.Key(itemID)).Padding(10).Radius(10)
+				if itemID == s.selected {
+					row.Background(ui.RGBA(238, 238, 240, 1))
 				}
-				ui.Column(c).Gap(2).Children(func() {
-					ui.Text(c, prefix).Bold()
-					ui.Text(c, strings.TrimSpace(m.Text))
+				row.Children(func() {
+					title := sm.Title
+					if sm.Primary {
+						// subtle star
+						title = "★ " + title
+					}
+					ui.Text(c, title).SingleLine()
+					if sm.WorkspaceDir != "" {
+						ui.Text(c, sm.WorkspaceDir).TextColor(t.TextMuted).FontSize(10).SingleLine()
+					}
 				})
+				if row.Clicked() {
+					_ = s.openSession(itemID)
+				}
 			}
-			if errText != "" {
-				ui.Text(c, "错误: "+errText)
-			}
+			ui.Spacer(c)
+			ui.Text(c, s.status).FontSize(11).TextColor(t.TextMuted)
 		})
+		// Main pane
+		ui.Column(c).Grow(1).Padding(16).Gap(12).Children(func() {
+			// Chat area
+			ui.Scroll(c).Grow(1).Padding(8).Gap(12).Children(func() {
+				for _, m := range s.msgs {
+					if m.you {
+						// user bubble
+						ui.Column(c).Children(func() {
+							ui.Text(c, "You").FontSize(12).TextColor(t.TextMuted)
+							ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(236, 243, 255, 1)).Children(func() {
+								ui.Text(c, m.text)
+							})
+						})
+					} else {
+						// assistant bubble
+						ui.Column(c).Children(func() {
+							ui.Text(c, "chatgo").FontSize(12).TextColor(t.TextMuted)
+							ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(245, 245, 247, 1)).Children(func() {
+								ui.Text(c, m.text)
+								// very quiet tool stub
+								ui.Text(c, "(tools: not wired)").FontSize(10).TextColor(t.TextMuted)
+							})
+						})
+					}
+				}
+				// streaming line
+				if s.streaming.Len() > 0 {
+					ui.Column(c).Children(func() {
+						ui.Text(c, "chatgo").FontSize(12).TextColor(t.TextMuted)
+						ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(245, 245, 247, 1)).Children(func() {
+							ui.Text(c, s.streaming.String())
+						})
+					})
+				}
+			})
+			// Composer bar
+			ui.Column(c).Gap(8).Children(func() {
+				// Styled input area
+				ui.Column(c).Padding(10).Radius(12).Background(ui.RGBA(250, 250, 252, 1)).Children(func() {
+					ta := ui.TextArea(c, &s.draft).Lines(1, 6).Placeholder("Type a message…")
+					ta.OnTextKey(func(k ui.TextKey) bool {
+						switch {
+						case k.Key == ui.KeyEnter && k.Mods == 0:
+							s.send()
+							k.SetText("")
+							return true
+						}
+						return false
+					})
+					ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+						// Assign (secondary), Stop (secondary), Send (primary)
+						if sm := s.currentSession(); sm != nil && sm.Primary {
+							if ui.Button(c, "Assign…").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+								s.assignOpen = !s.assignOpen
+							}
+						}
+						if ui.Button(c, "Stop").Disabled(!s.busy).Clicked() {
+							if s.br != nil {
+								_ = s.br.stop()
+							}
+						}
+						if ui.PrimaryButton(c, "Send").Disabled(s.busy || strings.TrimSpace(s.draft) == "").Clicked() {
+							s.send()
+						}
+					})
+				})
+				// Assign overlay (light, non-modal)
+				if s.assignOpen {
+					ui.Column(c).Padding(12).Radius(12).Background(ui.RGBA(255, 255, 255, 1)).Gap(6).Children(func() {
+						ui.Text(c, "Assign to session").Bold()
+						for _, sm := range s.sessions {
+							if sm.ID == s.selected {
+								continue
+							}
+							lbl := sm.Title
+							if sm.WorkspaceDir != "" {
+								lbl = fmt.Sprintf("%s  ·  %s", lbl, sm.WorkspaceDir)
+							}
+							if ui.Button(c, lbl).Clicked() {
+								s.dispatchTo(sm.ID, strings.TrimSpace(s.draft))
+								s.draft = ""
+								s.assignOpen = false
+							}
+						}
+						if ui.Button(c, "New worker…").Clicked() {
+							// optional workspace
+							var ws string
+							paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+								Parent:    s.win,
+								Title:     "Choose workspace folder (optional)",
+								Directory: true,
+							})
+							if err == nil && len(paths) > 0 {
+								ws = paths[0]
+							}
+							newID := s.newWorkerWithOptionalFolder(ws)
+							if newID != "" {
+								s.dispatchTo(newID, strings.TrimSpace(s.draft))
+								s.draft = ""
+								s.assignOpen = false
+							}
+						}
+					})
+				}
+			})
+		})
+	})
 
-		// Input row
-		ui.Row(c).Gap(8).Children(func() {
-			ui.TextInput(c, &a.input).Placeholder("输入你的问题…").Grow(1)
-			if a.isStreaming {
-				if ui.Button(c, "停止").Clicked() {
-					a.stopStream()
-				}
-			} else {
-				if ui.PrimaryButton(c, "发送").Clicked() {
-					a.startSend()
-				}
+	// ask_user dialog
+	ui.Modal(c, &s.askOpen, func() {
+		ui.Column(c).Width(420).Padding(16).Gap(12).Background(t.Background).Radius(12).Children(func() {
+			ui.Text(c, "Assistant asks").FontSize(16).Bold()
+			ui.Text(c, s.askQuestion)
+			if len(s.askOptions) > 0 {
+				ui.Row(c).Wrap().Gap(8).Children(func() {
+					for _, opt := range s.askOptions {
+						o := opt
+						if ui.Button(c, o).Clicked() {
+							s.answerAsk(o)
+							s.askOpen = false
+						}
+					}
+				})
+				ui.Text(c, "Or type your answer:").TextColor(t.TextMuted)
 			}
+			ui.TextInput(c, &s.askDraft).Placeholder("Type your answer…").AutoFocus()
+			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				if ui.Button(c, "Cancel").Clicked() {
+					s.askOpen = false
+					s.askDraft = ""
+				}
+				if ui.PrimaryButton(c, "Submit").Clicked() {
+					s.answerAsk(strings.TrimSpace(s.askDraft))
+					s.askOpen = false
+					s.askDraft = ""
+				}
+			})
 		})
 	})
 }
 
-func main() {
-	app := newApp()
+func (s *appState) send() {
+	text := strings.TrimSpace(s.draft)
+	if text == "" || s.br == nil {
+		return
+	}
+	// Warn about missing key in status (non-blocking)
+	if os.Getenv("DEEPSEEK_API_KEY") == "" &&
+		os.Getenv("OPENAI_API_KEY") == "" &&
+		os.Getenv("MAIN_VITE_API_KEY") == "" {
+		s.status = "No API key set (DEEPSEEK_API_KEY/OPENAI_API_KEY)"
+	}
+	id := fmt.Sprintf("m-%d", time.Now().UnixNano())
+	s.msgs = append(s.msgs, chatMsg{you: true, text: text})
+	s.draft = ""
+	s.busy = true
+	// persist user message
+	if sm := s.currentSession(); sm != nil {
+		_ = appendTranscriptLine(sm, transcriptLine{Type: "user", Text: text, Timestamp: time.Now().Unix()})
+		// auto-title if empty/default
+		if strings.EqualFold(sm.Title, "New chat") && text != "" {
+			sm.Title = truncateTitle(text)
+			_ = s.saveIndex()
+		}
+	}
+	if err := s.br.send(id, text); err != nil {
+		s.msgs = append(s.msgs, chatMsg{you: false, text: "⚠ send failed: " + err.Error()})
+		s.busy = false
+	}
+}
 
+func (s *appState) answerAsk(ans string) {
+	if s.br != nil && s.askReqID != "" {
+		if ans == "" {
+			ans = "(no answer)"
+		}
+		_ = s.br.askAnswer(s.askReqID, ans)
+	}
+}
+
+func main() {
+	state := &appState{
+		status:      "Starting chatgo…",
+		bgStreaming: make(map[string]*bytes.Buffer),
+	}
 	mygo.App.WhenReady(func() {
 		win := mygo.NewWindow(mygo.WindowOptions{
-			Title:   "Akari (MyGo)",
-			Width:   960,
-			Height:  720,
-			Content: ui.View(app.view),
+			Title:  "chatgo",
+			Width:  900,
+			Height: 640,
+			Content: ui.View(func(c *ui.Context) {
+				state.view(c)
+			}),
 		})
-		app.win = win
+		state.win = win
+		// Load or create sessions
+		_ = state.loadOrInitSessions()
+		// Start Node bridge
+		br, err := newBridge()
+		if err != nil {
+			win.Update(func() {
+				state.status = "Bridge error: " + err.Error()
+			})
+			return
+		}
+		state.br = br
+		// init with cwd of current session (if any)
+		_ = br.init("deepseek", "deepseek-v4-flash", state.currentWorkspace())
+		go func() {
+			for br.stdout.Scan() {
+				line := br.stdout.Text()
+				var ev ndjsonEvent
+				if err := json.Unmarshal([]byte(line), &ev); err != nil {
+					log.Println("bad bridge line:", line)
+					continue
+				}
+				switch ev.Type {
+				case "ready":
+					win.Update(func() {
+						state.status = fmt.Sprintf("pi ready: %s · %s", ev.Provider, ev.Model)
+					})
+				case "assistant_delta":
+					win.Update(func() {
+						if state.currentRun != ev.ID {
+							state.currentRun = ev.ID
+							state.streaming.Reset()
+						}
+						// route streaming by run context
+						if state.activeRunSession != "" && state.activeRunSession != state.selected {
+							buf := state.bgStreaming[state.activeRunSession]
+							if buf == nil {
+								b := &bytes.Buffer{}
+								state.bgStreaming[state.activeRunSession] = b
+								buf = b
+							}
+							buf.WriteString(ev.Text)
+						} else {
+							state.streaming.WriteString(ev.Text)
+						}
+					})
+				case "assistant_done":
+					win.Update(func() {
+						// background worker run?
+						if state.activeRunSession != "" && state.activeRunSession != state.selected {
+							buf := state.bgStreaming[state.activeRunSession]
+							out := ""
+							if buf != nil {
+								out = buf.String()
+								buf.Reset()
+							}
+							// append to worker transcript
+							for i := range state.sessions {
+								if state.sessions[i].ID == state.activeRunSession {
+									_ = appendTranscriptLine(&state.sessions[i], transcriptLine{Type: "assistant", Text: out, Timestamp: time.Now().Unix()})
+									break
+								}
+							}
+							_ = state.saveIndex()
+							// summary back to primary
+							summary := summarize(out)
+							state.msgs = append(state.msgs, chatMsg{you: false, text: fmt.Sprintf("Worker result: %s", summary)})
+							if sm := state.currentSession(); sm != nil {
+								_ = appendTranscriptLine(sm, transcriptLine{Type: "assistant", Text: fmt.Sprintf("Worker result: %s", summary), Timestamp: time.Now().Unix()})
+								_ = state.saveIndex()
+							}
+							// re-init back to primary cwd
+							if state.br != nil {
+								_ = state.br.init("deepseek", "deepseek-v4-flash", state.currentWorkspace())
+							}
+							state.activeRunSession = ""
+							state.currentRun = ""
+							state.busy = false
+						} else {
+							if state.streaming.Len() > 0 {
+								state.msgs = append(state.msgs, chatMsg{you: false, text: state.streaming.String()})
+								// persist assistant message
+								if sm := state.currentSession(); sm != nil {
+									_ = appendTranscriptLine(sm, transcriptLine{Type: "assistant", Text: state.streaming.String(), Timestamp: time.Now().Unix()})
+									_ = state.saveIndex()
+								}
+							}
+							state.streaming.Reset()
+							state.currentRun = ""
+							state.busy = false
+						}
+					})
+				case "error":
+					win.Update(func() {
+						state.msgs = append(state.msgs, chatMsg{you: false, text: "⚠ " + ev.Message})
+						state.streaming.Reset()
+						state.currentRun = ""
+						state.busy = false
+					})
+				case "ask_request":
+					win.Update(func() {
+						state.askOpen = true
+						state.askQuestion = ev.Question
+						state.askOptions = append([]string(nil), ev.Options...)
+						state.askReqID = ev.RequestID
+						state.askDraft = ""
+					})
+				default:
+					// ignore
+				}
+			}
+		}()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
+// ─── Sessions helpers ───────────────────────────────────────────────────────────
+func (s *appState) loadOrInitSessions() error {
+	idx, err := loadSessionIndex()
+	if err != nil {
+		return err
+	}
+	s.sessions = idx.Sessions
+	// ensure one primary (first marked if none)
+	hasPrimary := false
+	for _, sm := range s.sessions {
+		if sm.Primary {
+			hasPrimary = true
+			break
+		}
+	}
+	if !hasPrimary {
+		if len(s.sessions) > 0 {
+			s.sessions[0].Primary = true
+			_ = s.saveIndex()
+		}
+	}
+	// sort by UpdatedAt desc (simple stable selection by scanning)
+	if len(s.sessions) == 0 {
+		sm, err := newSessionMeta("New chat")
+		if err != nil {
+			return err
+		}
+		// create empty file
+		_ = appendTranscriptLine(&sm, transcriptLine{Type: "assistant", Text: "Welcome to chatgo!", Timestamp: time.Now().Unix()})
+		// remove the welcome from messages load later, keep file created
+		// rewrite file empty
+		_ = os.WriteFile(sm.File, []byte{}, 0o644)
+		sm.Primary = true
+		s.sessions = []sessionMeta{sm}
+		s.selected = sm.ID
+		_ = s.saveIndex()
+	} else {
+		// pick most recently updated
+		best := s.sessions[0]
+		for _, sm := range s.sessions {
+			if sm.UpdatedAt > best.UpdatedAt {
+				best = sm
+			}
+		}
+		s.selected = best.ID
+	}
+	_ = s.openSession(s.selected)
+	return nil
+}
+
+func (s *appState) saveIndex() error {
+	return saveSessionIndex(sessionIndex{Sessions: s.sessions})
+}
+
+func (s *appState) currentSession() *sessionMeta {
+	for i := range s.sessions {
+		if s.sessions[i].ID == s.selected {
+			return &s.sessions[i]
+		}
+	}
+	return nil
+}
+
+func (s *appState) currentWorkspace() string {
+	if sm := s.currentSession(); sm != nil {
+		return sm.WorkspaceDir
+	}
+	return ""
+}
+
+func (s *appState) openSession(id string) error {
+	var sm *sessionMeta
+	for i := range s.sessions {
+		if s.sessions[i].ID == id {
+			sm = &s.sessions[i]
+			break
+		}
+	}
+	if sm == nil {
+		return fmt.Errorf("session not found")
+	}
+	msgs, _ := readTranscript(*sm)
+	s.selected = sm.ID
+	s.msgs = msgs
+	s.streaming.Reset()
+	// re-init bridge with cwd
+	if s.br != nil {
+		_ = s.br.init("deepseek", "deepseek-v4-flash", s.currentWorkspace())
+	}
+	return nil
+}
+
+func (s *appState) newChat() {
+	sm, err := newSessionMeta("New chat")
+	if err != nil {
+		s.status = "Failed to create session: " + err.Error()
+		return
+	}
+	s.sessions = append([]sessionMeta{sm}, s.sessions...)
+	s.selected = sm.ID
+	s.msgs = nil
+	s.streaming.Reset()
+	_ = s.saveIndex()
+	// re-init bridge (cwd may change)
+	if s.br != nil {
+		_ = s.br.init("deepseek", "deepseek-v4-flash", "")
+	}
+}
+
+func (s *appState) newWorkerWithOptionalFolder(ws string) string {
+	sm, err := newSessionMeta("New chat")
+	if err != nil {
+		s.status = "Failed to create session: " + err.Error()
+		return ""
+	}
+	sm.WorkspaceDir = ws
+	// never mark worker as primary
+	s.sessions = append([]sessionMeta{sm}, s.sessions...)
+	_ = s.saveIndex()
+	return sm.ID
+}
+
+func (s *appState) bindWorkspace() {
+	if s.win == nil {
+		return
+	}
+	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+		Parent:    s.win,
+		Title:     "Choose workspace folder",
+		Directory: true,
+	})
+	if err != nil || len(paths) == 0 {
+		return
+	}
+	ws := paths[0]
+	if sm := s.currentSession(); sm != nil {
+		sm.WorkspaceDir = ws
+		_ = s.saveIndex()
+	}
+	// re-init bridge with new cwd
+	if s.br != nil {
+		_ = s.br.init("deepseek", "deepseek-v4-flash", ws)
+	}
+}
+
+func truncateTitle(s string) string {
+	t := strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len([]rune(t)) > 24 {
+		r := []rune(t)
+		return string(r[:24])
+	}
+	return t
+}
+
+func summarize(s string) string {
+	txt := strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len([]rune(txt)) > 200 {
+		r := []rune(txt)
+		return string(r[:200]) + "…"
+	}
+	return txt
+}
+
+func (s *appState) dispatchTo(sessionID string, prompt string) {
+	if s.br == nil || prompt == "" {
+		return
+	}
+	// find or create target
+	var target *sessionMeta
+	for i := range s.sessions {
+		if s.sessions[i].ID == sessionID {
+			target = &s.sessions[i]
+			break
+		}
+	}
+	if target == nil {
+		return
+	}
+	// persist user prompt in worker transcript
+	_ = appendTranscriptLine(target, transcriptLine{Type: "user", Text: prompt, Timestamp: time.Now().Unix()})
+	_ = s.saveIndex()
+	// switch bridge to worker cwd and run in background
+	s.busy = true
+	s.activeRunSession = target.ID
+	id := fmt.Sprintf("w-%d", time.Now().UnixNano())
+	if s.br != nil {
+		_ = s.br.init("deepseek", "deepseek-v4-flash", target.WorkspaceDir)
+	}
+	if err := s.br.send(id, prompt); err != nil {
+		// report error into primary
+		s.msgs = append(s.msgs, chatMsg{you: false, text: "⚠ dispatch failed: " + err.Error()})
+		s.busy = false
+		s.activeRunSession = ""
+	}
+}
